@@ -35,8 +35,6 @@ The repository also includes auxiliary utilities for preprocessing datasets, cap
 
 ## 🚀 Getting Started
 
-To get started, clone this repository and install the required dependencies:
-
 First, install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you haven't already.
 Then clone the repository and install the dependencies:
 
@@ -171,7 +169,10 @@ Videos are processed as follows:
 
 ##### Dataset Format
 
-The script supports these input formats:
+The trainer supports on either videos or single images.
+Note that your dataset must be homogeneous - either all videos or all images, mixing is not supported.
+When using images, follow the same preprocessing steps and format requirements as with videos,
+simply provide image files instead of video files.
 
 1. Directory with text files:
 
@@ -252,9 +253,9 @@ The main configuration class is [`LtxvTrainerConfig`](src/ltxv_trainer/config.py
 Check out our example configurations in the `configs` directory. You can use these as templates
 for your training runs:
 
-- 📄 [LoRA Fine-tuning Example](configs/ltxv_2b_lora.yaml)
-- 📄 [LoRA Fine-tuning Example (Low VRAM)](configs/ltxv_2b_lora_low_vram.yaml)
 - 📄 [Full Model Fine-tuning Example](configs/ltxv_2b_full.yaml)
+- 📄 [LoRA Fine-tuning Example](configs/ltxv_2b_lora.yaml)
+- 📄 [LoRA Fine-tuning Example (Low VRAM)](configs/ltxv_2b_lora_low_vram.yaml) - Optimized for GPUs with 24GB VRAM.
 
 ---
 
