@@ -10,8 +10,8 @@
 
 </div>
 
-This repository provides tools and scripts for training and fine-tuning Lightricks' LTX Video model.
-It allows training LoRAs on top of LTXV, as well as fine-tuning the entire model on custom datasets.
+This repository provides tools and scripts for training and fine-tuning Lightricks' [LTX-Video (LTXV)](https://github.com/Lightricks/LTX-Video) model.
+It allows training LoRAs on top of LTX-Video, as well as fine-tuning the entire model on custom datasets.
 The repository also includes auxiliary utilities for preprocessing datasets, captioning videos, splitting scenes, etc.
 
 ---
@@ -41,8 +41,8 @@ First, install [uv](https://docs.astral.sh/uv/getting-started/installation/) if 
 Then clone the repository and install the dependencies:
 
 ```bash
-git clone https://github.com/LightricksResearch/ltxv-community-trainer
-cd ltxv-community-trainer
+git clone https://github.com/Lightricks/LTX-Video-Trainer
+cd LTX-Video-Trainer
 uv sync
 source .venv/bin/activate
 ```
@@ -113,7 +113,7 @@ The preprocessing significantly accelerates training and reduces GPU memory usag
 Videos are organized into "buckets" of specific dimensions (width × height × frames). Each video is assigned to the nearest matching bucket.
 Currently, the trainer only supports using a single resolution bucket.
 
-The dimensions of each bucket must follow these constraints due to LTXV's VAE architecture:
+The dimensions of each bucket must follow these constraints due to LTX-Video's VAE architecture:
 
 - Spatial dimensions (width and height) must be multiples of 32
 - Number of frames must be a multiple of 8 plus 1 (e.g., 25, 33, 41, 49, etc.)
