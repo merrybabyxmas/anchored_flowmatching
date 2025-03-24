@@ -31,7 +31,7 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
-from safetensors.torch import save_file
+from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
 from torch.amp import autocast
 from torch.optim import AdamW
@@ -85,6 +85,7 @@ class LtxvTrainer:
         self._load_models()
         self._compile_transformer()
         self._collect_trainable_params()
+        self._load_checkpoint()
         self._global_step = -1
         self._checkpoint_paths = []
 
@@ -105,7 +106,7 @@ class LtxvTrainer:
         train_start_time = time.time()
         set_seed(cfg.seed)
 
-        if cfg.model.training_mode == "lora":
+        if cfg.model.training_mode == "lora" and not cfg.model.load_checkpoint:
             self._init_lora_weights()
 
         self._init_optimizer()
@@ -464,6 +465,64 @@ class LtxvTrainer:
             init_lora_weights=True,
         )
         self._transformer.add_adapter(lora_config)
+
+    def _load_checkpoint(self) -> None:
+        """Load checkpoint if specified in config."""
+        if not self._config.model.load_checkpoint:
+            return
+
+        checkpoint_path = self._find_checkpoint(self._config.model.load_checkpoint)
+        if not checkpoint_path:
+            logger.warning(f"⚠️ Could not find checkpoint at {self._config.model.load_checkpoint}")
+            return
+
+        transformer = self._accelerator.unwrap_model(self._transformer)
+
+        logger.info(f"📥 Loading checkpoint from {checkpoint_path}")
+        state_dict = load_file(checkpoint_path)
+
+        if self._config.model.training_mode == "full":
+            transformer.load_state_dict(state_dict)
+        else:  # LoRA mode
+            # Adjust layer names to match PEFT format
+            state_dict = {k.replace("transformer.", "", 1): v for k, v in state_dict.items()}
+            state_dict = {k.replace("lora_A", "lora_A.default", 1): v for k, v in state_dict.items()}
+            state_dict = {k.replace("lora_B", "lora_B.default", 1): v for k, v in state_dict.items()}
+
+            # Load LoRA weights and verify all weights were loaded
+            _, unexpected_keys = transformer.load_state_dict(state_dict, strict=False)
+            if unexpected_keys:
+                raise ValueError(f"Failed to load some LoRA weights: {unexpected_keys}")
+
+    @staticmethod
+    def _find_checkpoint(checkpoint_path: str | Path) -> Path | None:
+        """Find the checkpoint file to load, handling both file and directory paths."""
+        checkpoint_path = Path(checkpoint_path)
+
+        if checkpoint_path.is_file():
+            if not checkpoint_path.suffix == ".safetensors":
+                raise ValueError(f"Checkpoint file must have a .safetensors extension: {checkpoint_path}")
+            return checkpoint_path
+
+        if checkpoint_path.is_dir():
+            # Look for checkpoint files in the directory
+            checkpoints = list(checkpoint_path.rglob("*step_*.safetensors"))
+
+            if not checkpoints:
+                return None
+
+            # Sort by step number and return the latest
+            def _get_step_num(p: Path) -> int:
+                try:
+                    return int(p.stem.split("step_")[1])
+                except (IndexError, ValueError):
+                    return -1
+
+            latest = max(checkpoints, key=_get_step_num)
+            return latest
+
+        else:
+            raise ValueError(f"Invalid checkpoint path: {checkpoint_path}. Must be a file or directory.")
 
     def _init_dataloader(self) -> None:
         """Initialize the training data loader."""

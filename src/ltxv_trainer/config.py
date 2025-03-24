@@ -24,6 +24,12 @@ class ModelConfig(ConfigBaseModel):
         description="Training mode - either LoRA fine-tuning or full model fine-tuning",
     )
 
+    load_checkpoint: str | Path | None = Field(
+        default=None,
+        description="Path to a checkpoint file or directory to load from. "
+        "If a directory is provided, the latest checkpoint will be used.",
+    )
+
     # noinspection PyNestedDecorators
     @field_validator("model_source", mode="before")
     @classmethod
