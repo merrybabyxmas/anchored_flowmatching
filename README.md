@@ -297,10 +297,38 @@ python scripts/train.py configs/ltxv_2b_lora.yaml
 python scripts/train.py configs/ltxv_2b_full.yaml
 ```
 
-The trainer loads your configuration, initializes models, applies optimizations, runs the training loop with progress tracking, generates validation videos (if configured), and saves the trained weights.
+The trainer loads your configuration, initializes models, applies optimizations,
+runs the training loop with progress tracking, generates validation videos (if configured), and saves the trained weights.
 
 For LoRA training, the weights will be saved as `lora_weights.safetensors` in your output directory.
 For full model fine-tuning, the weights will be saved as `model_weights.safetensors`.
+
+## 🖥️ Distributed / Multi-GPU Training
+
+For larger training jobs, you can run the trainer across multiple GPUs on a single machine using our
+distributed training script, which leverages [Hugging Face Accelerate](https://huggingface.co/docs/accelerate/index).
+
+Use the provided script:
+
+```bash
+python scripts/train_distributed.py CONFIG_PATH [OPTIONS]
+```
+
+**Example:**
+
+```bash
+# Launch distributed training on all available GPUs
+python scripts/train_distributed.py configs/ltxv_2b_lora.yaml
+
+# Specify the number of processes/GPUs explicitly
+CUDA_VISIBLE_DEVICES=0,1 python scripts/train_distributed.py configs/ltxv_2b_lora.yaml --num_processes 2
+```
+
+**Options:**
+- `--num_processes`: Number of GPUs/processes to use (overrides auto-detection).
+- `--disable_progress_bars`: Disables rich progress bars (recommended for multi-GPU runs).
+
+The script will automatically detect the number of available GPUs using `nvidia-smi` if `--num_processes` is not specified.
 
 ### 🤗 Pushing Models to Hugging Face Hub
 

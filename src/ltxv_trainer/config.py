@@ -229,6 +229,15 @@ class ValidationConfig(ConfigBaseModel):
         ge=1.0,
     )
 
+    @field_validator("images")
+    @classmethod
+    def validate_num_images(cls, v: list[str] | None, values: dict) -> list[str] | None:
+        """Validate that number of images (if provided) matches number of prompts."""
+        num_prompts = len(values.get("prompts", []))
+        if v is not None and len(v) != num_prompts:
+            raise ValueError(f"Number of images ({len(v)}) must match number of prompts ({num_prompts})")
+        return v
+
 
 class CheckpointsConfig(ConfigBaseModel):
     """Configuration for model checkpointing during training"""
