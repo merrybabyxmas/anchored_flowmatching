@@ -430,7 +430,7 @@ def main(  # noqa: PLR0913
     ),
     clean_caption: bool = typer.Option(
         True,
-        "--clean-caption/--raw-caption",
+        "--clean-caption",
         help="Whether to clean up captions by removing common VLM patterns",
     ),
     override: bool = typer.Option(
