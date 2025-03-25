@@ -1,4 +1,3 @@
-import itertools
 import os
 import random
 import time
@@ -86,6 +85,7 @@ class LtxvTrainer:
         self._compile_transformer()
         self._collect_trainable_params()
         self._load_checkpoint()
+        self._dataset = None
         self._global_step = -1
         self._checkpoint_paths = []
 
@@ -167,7 +167,14 @@ class LtxvTrainer:
             if cfg.validation.interval:
                 self._sample_videos(sample_progress)
 
-            for step, batch in enumerate(self._data_loader):
+            for step in range(cfg.optimization.steps):
+                # Get next batch, reset the dataloader if needed
+                try:
+                    batch = next(self._data_loader)
+                except StopIteration:
+                    self._init_dataloader()
+                    batch = next(self._data_loader)
+
                 # Measure compilation time (first COMPILE_WARMUP_STEPS steps)
                 if step == COMPILE_WARMUP_STEPS and cfg.acceleration.compile_with_inductor:
                     compilation_time = time.time() - train_start_time
@@ -253,9 +260,6 @@ class LtxvTrainer:
                     if step % 25 == 0:
                         current_mem = get_gpu_memory_gb(device)
                         peak_mem_during_training = max(peak_mem_during_training, current_mem)
-
-                    if self._global_step >= cfg.optimization.steps:
-                        break
 
             # Collect final stats
             train_end_time = time.time()
@@ -526,11 +530,12 @@ class LtxvTrainer:
 
     def _init_dataloader(self) -> None:
         """Initialize the training data loader."""
-        dataset = PrecomputedDataset(self._config.data.preprocessed_data_root)
 
-        # Create dataloader
+        if self._dataset is None:
+            self._dataset = PrecomputedDataset(self._config.data.preprocessed_data_root)
+
         data_loader = DataLoader(
-            dataset,
+            self._dataset,
             batch_size=self._config.optimization.batch_size,
             shuffle=True,
             drop_last=True,
@@ -540,9 +545,7 @@ class LtxvTrainer:
 
         # noinspection PyTypeChecker
         data_loader = self._accelerator.prepare(data_loader)
-
-        # Create infinite data loader
-        self._data_loader = itertools.cycle(data_loader)
+        self._data_loader = iter(data_loader)
 
     def _init_lora_weights(self) -> None:
         """Initialize LoRA weights for the transformer."""
