@@ -265,10 +265,10 @@ After preprocessing your dataset and preparing a configuration file, you can sta
 
 ```bash
 # Train a LoRA
-python scripts/train.py configs/lora_example.yaml
+python scripts/train.py configs/ltxv_2b_lora.yaml
 
 # Fine-tune the full model
-python scripts/train.py configs/full_example.yaml
+python scripts/train.py configs/ltxv_2b_full.yaml
 ```
 
 The trainer loads your configuration, initializes models, applies optimizations, runs the training loop with progress tracking, generates validation videos (if configured), and saves the trained weights.
