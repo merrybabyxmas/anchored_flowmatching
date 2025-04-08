@@ -189,6 +189,12 @@ class ValidationConfig(ConfigBaseModel):
         description="Negative prompt to use for validation examples",
     )
 
+    images: list[str] | None = Field(
+        default=None,
+        description="List of image paths to use for validation. "
+        "One image path must be provided for each validation prompt",
+    )
+
     video_dims: tuple[int, int, int] = Field(
         default=(704, 480, 161),
         description="Dimensions of validation videos (width, height, frames)",
