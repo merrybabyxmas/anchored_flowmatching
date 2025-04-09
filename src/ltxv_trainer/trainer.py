@@ -303,9 +303,22 @@ class LtxvTrainer:
         latent_conditions = batch["latent_conditions"]
         latent_conditions["latents"].squeeze_(1)
         packed_latents = latent_conditions["latents"]
+
+        # TODO: support batch sizes > 1 (requires a PR for the diffusers LTXImageToVideoPipeline)
+        # Batch sizes > 1 are partially supported, assuming num_frames, height, width, fps
+        # are the same for all batch elements.
         latent_frames = latent_conditions["num_frames"][0].item()
         latent_height = latent_conditions["height"][0].item()
         latent_width = latent_conditions["width"][0].item()
+
+        # Handle FPS with backward compatibility for old preprocessed datasets
+        fps = latent_conditions.get("fps", None)
+        fps = fps[0].item() if fps is not None else 24
+
+        if fps is not None and not torch.all(fps == fps[0]):
+            logger.warning(
+                f"Different FPS values found in the batch. Found: {fps.tolist()}, using the first one: {fps[0].item()}"
+            )
 
         # Get pre-encoded text conditions
         text_conditions = batch["text_conditions"]
@@ -334,8 +347,7 @@ class LtxvTrainer:
         noisy_latents = (1 - sigmas) * packed_latents + sigmas * noise
         targets = noise - packed_latents
 
-        # TODO: fetch from data loader
-        latent_frame_rate = 24 / 8
+        latent_frame_rate = fps / 8
         spatial_compression_ratio = 32
         rope_interpolation_scale = [1 / latent_frame_rate, spatial_compression_ratio, spatial_compression_ratio]
 
