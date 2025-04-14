@@ -111,8 +111,8 @@ def _normalize_latents(
     std: Tensor,
 ) -> Tensor:
     """Normalizes latents using mean and standard deviation across the channel dimension."""
-    mean = mean.view(latents.shape[0], -1, 1, 1, 1).to(latents.device, latents.dtype)
-    std = std.view(latents.shape[0], -1, 1, 1, 1).to(latents.device, latents.dtype)
+    mean = mean.view(1, -1, 1, 1, 1).repeat(latents.shape[0], 1, 1, 1, 1).to(latents.device, latents.dtype)
+    std = std.view(1, -1, 1, 1, 1).repeat(latents.shape[0], 1, 1, 1, 1).to(latents.device, latents.dtype)
     latents = (latents - mean) / std
     return latents
 

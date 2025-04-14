@@ -15,6 +15,7 @@ The dataset can be either:
 2. A CSV, JSON, or JSONL file with columns for captions and video paths
 """
 
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -286,15 +287,15 @@ class DatasetPreprocessor:
 
             fps = batch["video_metadata"]["fps"][i].item()
             latent_item = {
-                "latents": video_latents["latents"][i],
+                "latents": video_latents["latents"][i].cpu().contiguous(),
                 "num_frames": video_latents["num_frames"],
                 "height": video_latents["height"],
                 "width": video_latents["width"],
                 "fps": fps,
             }
             condition_item = {
-                "prompt_embeds": text_embeddings["prompt_embeds"][i],
-                "prompt_attention_mask": text_embeddings["prompt_attention_mask"][i],
+                "prompt_embeds": text_embeddings["prompt_embeds"][i].cpu().contiguous(),
+                "prompt_attention_mask": text_embeddings["prompt_attention_mask"][i].cpu().contiguous(),
             }
 
             torch.save(latent_item, latent_path)
@@ -331,7 +332,7 @@ class DatasetPreprocessor:
                     torchvision.io.write_video(
                         str(output_path),
                         video.cpu(),
-                        fps=fps,
+                        fps=Fraction(fps).limit_denominator(1000),
                         video_codec="h264",
                         options={"crf": "18"},
                     )
