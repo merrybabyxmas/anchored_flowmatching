@@ -599,8 +599,8 @@ class LtxvTrainer:
         if scheduler_type == "linear":
             scheduler = LinearLR(
                 optimizer,
-                start_factor=params.get("start_factor", 1.0),
-                end_factor=params.get("end_factor", 0.1),
+                start_factor=params.pop("start_factor", 1.0),
+                end_factor=params.pop("end_factor", 0.1),
                 total_iters=steps,
                 **params,
             )
@@ -614,23 +614,23 @@ class LtxvTrainer:
         elif scheduler_type == "cosine_with_restarts":
             scheduler = CosineAnnealingWarmRestarts(
                 optimizer,
-                T_0=params.get("T_0", steps // 4),  # First restart cycle length
-                T_mult=params.get("T_mult", 1),  # Multiplicative factor for cycle lengths
-                eta_min=params.get("eta_min", 5e-5),
+                T_0=params.pop("T_0", steps // 4),  # First restart cycle length
+                T_mult=params.pop("T_mult", 1),  # Multiplicative factor for cycle lengths
+                eta_min=params.pop("eta_min", 5e-5),
                 **params,
             )
         elif scheduler_type == "polynomial":
             scheduler = PolynomialLR(
                 optimizer,
                 total_iters=steps,
-                power=params.get("power", 1.0),
+                power=params.pop("power", 1.0),
                 **params,
             )
         elif scheduler_type == "step":
             scheduler = StepLR(
                 optimizer,
-                step_size=params.get("step_size", steps // 2),
-                gamma=params.get("gamma", 0.1),
+                step_size=params.pop("step_size", steps // 2),
+                gamma=params.pop("gamma", 0.1),
                 **params,
             )
         elif scheduler_type == "constant":
