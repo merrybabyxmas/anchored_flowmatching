@@ -1,6 +1,6 @@
 <div align="center">
 
-# LTX-Video Community Trainer
+<img src="assets/banner.webp" alt="LTX-Video Community Trainer Banner" width="75%">
 
 [Official GitHub Repo](https://github.com/Lightricks/LTX-Video) |
 [Website](https://www.lightricks.com/ltxv) |
@@ -13,6 +13,18 @@
 This repository provides tools and scripts for training and fine-tuning Lightricks' [LTX-Video (LTXV)](https://github.com/Lightricks/LTX-Video) model.
 It allows training LoRAs on top of LTX-Video, as well as fine-tuning the entire model on custom datasets.
 The repository also includes auxiliary utilities for preprocessing datasets, captioning videos, splitting scenes, etc.
+
+---
+
+<div align="center">
+
+| <img src="assets/cakeify.gif" width="256px">  | <img src="assets/squish.gif" width="256px"> |
+| --------------------------------------------- | ------------------------------------------- |
+| <img src="assets/dissolve.gif" width="256px"> | <img src="assets/slime.gif" width="256px">  |
+
+<small>Examples of effects trained as LoRAs on top of LTX-Video 13B</small>
+
+</div>
 
 ---
 
