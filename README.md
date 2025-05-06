@@ -35,7 +35,7 @@ The repository also includes auxiliary utilities for preprocessing datasets, cap
 
 ## 📝 Changelog
 
-- **25.04.2025:** Added support for LTXV 13B. Example training configs can be found in
+- **06.05.2025:** Added support for LTXV 13B. Example training configs can be found in
   [configs/ltxv_13b_lora_cakeify.yaml](configs/ltxv_13b_lora_cakeify.yaml) and [configs/ltxv_13b_lora_squish.yaml](configs/ltxv_13b_lora_squish.yaml).
 
 > [!NOTE]
