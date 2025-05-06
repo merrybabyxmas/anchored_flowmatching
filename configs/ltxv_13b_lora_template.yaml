@@ -2,14 +2,14 @@
 
 # Model configuration
 model:
-  model_source: "LTXV_2B_0.9.5" # Options: "LTXV_13B_097_DEV", "LTXV_2B_0.9.5", "LTXV_2B_0.9.1", "LTXV_2B_0.9.0", or a HF repo/local path
+  model_source: "LTXV_13B_097_DEV" # Options: "LTXV_13B_097_DEV", "LTXV_2B_0.9.5", "LTXV_2B_0.9.1", "LTXV_2B_0.9.0", or a HF repo/local path
   training_mode: "lora" # Options: "lora" or "full"
   load_checkpoint: null # Path to checkpoint file or directory to resume from. If directory, latest checkpoint will be used.
 
 # LoRA configuration
 lora:
-  rank: 32
-  alpha: 32
+  rank: [RANK]
+  alpha: [RANK]
   dropout: 0.0
   target_modules:
     - "to_k"
@@ -20,40 +20,40 @@ lora:
 # Optimization configuration
 optimization:
   learning_rate: 2e-4
-  steps: 1500
+  steps: 2000
   batch_size: 1
   gradient_accumulation_steps: 1
   max_grad_norm: 1.0
-  optimizer_type: "adamw8bit" # Options: "adamw" or "adamw8bit"
+  optimizer_type: "adamw" # Options: "adamw" or "adamw8bit"
   scheduler_type: "linear" # Options: "constant", "linear", "cosine", "cosine_with_restarts", "polynomial"
   scheduler_params: {}
   enable_gradient_checkpointing: true
-  first_frame_conditioning_p: 0.1
+  first_frame_conditioning_p: 0.5
 
 # Acceleration optimization
 acceleration:
   mixed_precision_mode: "bf16" # Options: "no", "fp16", "bf16"
-  quantization: "fp8-quanto" # Options: null, "int8-quanto", "int4-quanto", "int2-quanto", "fp8-quanto", "fp8uz-quanto"
-  load_text_encoder_in_8bit: true # Load text encoder in 8-bit precision to save memory
+  quantization: null # Options: null, "int8-quanto", "int4-quanto", "int2-quanto", "fp8-quanto", "fp8uz-quanto"
+  load_text_encoder_in_8bit: false # Load text encoder in 8-bit precision to save memory
   compile_with_inductor: false
   compilation_mode: "reduce-overhead" # Options: "default", "reduce-overhead", "max-autotune"
 
 # Data configuration
 data:
-  preprocessed_data_root: "/path/to/preprocessed/data"
+  preprocessed_data_root: "[BASENAME]_scenes"
   num_dataloader_workers: 2
 
 # Validation configuration
 validation:
   prompts:
-    - "a professional portrait video of a person with blurry bokeh background"
-    - "a video of a person wearing a nice suit"
+    - "CAKEIFY a person using a knife to cut a cake shaped like bottle of mouthwash"
+    - "CAKEIFY a person using a knife to cut a cake shaped like potted plant"
+    - "CAKEIFY a person using a knife to cut a cake shaped like a jar of Nutella"
   negative_prompt: "worst quality, inconsistent motion, blurry, jittery, distorted"
-  images: null # Set to a list of image paths to use first-frame conditioning, or null to disable
-  video_dims: [768, 448, 89] # [width, height, frames]
+  video_dims: [576, 576, 121] # [width, height, frames]
   seed: 42
   inference_steps: 50
-  interval: 100 # Set to null to disable validation
+  interval: 250 # Set to null to disable validation
   videos_per_prompt: 1
   guidance_scale: 3.5
 
@@ -69,4 +69,4 @@ flow_matching:
 
 # General configuration
 seed: 42
-output_dir: "outputs/ltxv_lora"
+output_dir: "outputs/[BASENAME]_lora_r[RANK]"
