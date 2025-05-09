@@ -25,6 +25,8 @@ class LtxvModelVersion(str, Enum):
     LTXV_2B_090 = "LTXV_2B_0.9.0"
     LTXV_2B_091 = "LTXV_2B_0.9.1"
     LTXV_2B_095 = "LTXV_2B_0.9.5"
+    LTXV_2B_096_DEV = "LTXV_2B_0.9.6_DEV"
+    LTXV_2B_096_DISTILLED = "LTXV_2B_0.9.6_DISTILLED"
     LTXV_13B_097_DEV = "LTXV_13B_097_DEV"
 
     def __str__(self) -> str:
@@ -46,6 +48,10 @@ class LtxvModelVersion(str, Enum):
                 return "Lightricks/LTX-Video-0.9.1"
             case LtxvModelVersion.LTXV_2B_095:
                 return "Lightricks/LTX-Video-0.9.5"
+            case LtxvModelVersion.LTXV_2B_096_DEV:
+                raise ValueError("LTXV_2B_096_DEV does not have a HuggingFace repo")
+            case LtxvModelVersion.LTXV_2B_096_DISTILLED:
+                raise ValueError("LTXV_2B_096_DISTILLED does not have a HuggingFace repo")
             case LtxvModelVersion.LTXV_13B_097_DEV:
                 raise ValueError("LTXV_13B_097_DEV does not have a HuggingFace repo")
         raise ValueError(f"Unknown version: {self}")
@@ -60,6 +66,10 @@ class LtxvModelVersion(str, Enum):
                 return "https://huggingface.co/Lightricks/LTX-Video/blob/main/ltx-video-2b-v0.9.1.safetensors"
             case LtxvModelVersion.LTXV_2B_095:
                 return "https://huggingface.co/Lightricks/LTX-Video/blob/main/ltx-video-2b-v0.9.5.safetensors"
+            case LtxvModelVersion.LTXV_2B_096_DEV:
+                return "https://huggingface.co/Lightricks/LTX-Video/blob/main/ltxv-2b-0.9.6-dev-04-25.safetensors"
+            case LtxvModelVersion.LTXV_2B_096_DISTILLED:
+                return "https://huggingface.co/Lightricks/LTX-Video/blob/main/ltxv-2b-0.9.6-distilled-04-25.safetensors"
             case LtxvModelVersion.LTXV_13B_097_DEV:
                 return "https://huggingface.co/Lightricks/LTX-Video/blob/main/ltxv-13b-0.9.7-dev.safetensors"
         raise ValueError(f"Unknown version: {self}")
@@ -149,23 +159,21 @@ def load_vae(
             source = version
 
     if isinstance(source, LtxvModelVersion):
-        # NOTE: V0.9.5 must be loaded from the Diffusers folder-format instead of safetensors
+        # NOTE: LTXV_2B_095's VAE must be loaded from the Diffusers folder-format instead of safetensors
+        # This is a special case also for LTXV_2B_096_DEV and LTXV_13B_097_DEV which
+        # don't have standalone HuggingFace repos, but share the same VAE as LTXV_2B_095.
         # Remove this once Diffusers properly supports loading from the safetensors file.
-        if source == LtxvModelVersion.LTXV_2B_095:
-            return AutoencoderKLLTXVideo.from_pretrained(
-                source.hf_repo,
-                subfolder="vae",
-                torch_dtype=dtype,
-            )
-        # Special case for LTXV-13B which doesn't yet have a HuggingFace repo.
-        # The VAE is similar to that of 2B v0.9.5
-        elif source == LtxvModelVersion.LTXV_13B_097_DEV:
+        if source in (
+            LtxvModelVersion.LTXV_2B_095,
+            LtxvModelVersion.LTXV_2B_096_DEV,
+            LtxvModelVersion.LTXV_2B_096_DISTILLED,
+            LtxvModelVersion.LTXV_13B_097_DEV,
+        ):
             return AutoencoderKLLTXVideo.from_pretrained(
                 LtxvModelVersion.LTXV_2B_095.hf_repo,
                 subfolder="vae",
                 torch_dtype=dtype,
             )
-
         return AutoencoderKLLTXVideo.from_single_file(
             source.safetensors_url,
             torch_dtype=dtype,
