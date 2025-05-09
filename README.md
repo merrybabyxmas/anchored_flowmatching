@@ -6,7 +6,8 @@
 [Website](https://www.lightricks.com/ltxv) |
 [Model](https://huggingface.co/Lightricks/LTX-Video) |
 [Demo](https://app.ltx.studio/ltx-video) |
-[Paper](https://arxiv.org/abs/2501.00103)
+[Paper](https://arxiv.org/abs/2501.00103) |
+[Discord](https://discord.gg/Mn8BRgUKKy)
 
 </div>
 
