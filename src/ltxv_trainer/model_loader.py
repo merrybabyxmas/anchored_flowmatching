@@ -28,6 +28,7 @@ class LtxvModelVersion(str, Enum):
     LTXV_2B_096_DEV = "LTXV_2B_0.9.6_DEV"
     LTXV_2B_096_DISTILLED = "LTXV_2B_0.9.6_DISTILLED"
     LTXV_13B_097_DEV = "LTXV_13B_097_DEV"
+    LTXV_13B_097_DISTILLED = "LTXV_13B_097_DISTILLED"
 
     def __str__(self) -> str:
         """Return the version string."""
@@ -54,10 +55,12 @@ class LtxvModelVersion(str, Enum):
                 raise ValueError("LTXV_2B_096_DISTILLED does not have a HuggingFace repo")
             case LtxvModelVersion.LTXV_13B_097_DEV:
                 raise ValueError("LTXV_13B_097_DEV does not have a HuggingFace repo")
+            case LtxvModelVersion.LTXV_13B_097_DISTILLED:
+                raise ValueError("LTXV_13B_097_DISTILLED does not have a HuggingFace repo")
         raise ValueError(f"Unknown version: {self}")
 
     @property
-    def safetensors_url(self) -> str:
+    def safetensors_url(self) -> str:  # noqa: PLR0911
         """Get the safetensors URL for this version."""
         match self:
             case LtxvModelVersion.LTXV_2B_090:
@@ -72,6 +75,8 @@ class LtxvModelVersion(str, Enum):
                 return "https://huggingface.co/Lightricks/LTX-Video/blob/main/ltxv-2b-0.9.6-distilled-04-25.safetensors"
             case LtxvModelVersion.LTXV_13B_097_DEV:
                 return "https://huggingface.co/Lightricks/LTX-Video/blob/main/ltxv-13b-0.9.7-dev.safetensors"
+            case LtxvModelVersion.LTXV_13B_097_DISTILLED:
+                return "https://huggingface.co/Lightricks/LTX-Video/blob/main/ltxv-13b-0.9.7-distilled.safetensors"
         raise ValueError(f"Unknown version: {self}")
 
 
@@ -160,7 +165,7 @@ def load_vae(
 
     if isinstance(source, LtxvModelVersion):
         # NOTE: LTXV_2B_095's VAE must be loaded from the Diffusers folder-format instead of safetensors
-        # This is a special case also for LTXV_2B_096_DEV and LTXV_13B_097_DEV which
+        # This is a special case also for LTXV_2B_096_DEV and LTXV_13B_097_* which
         # don't have standalone HuggingFace repos, but share the same VAE as LTXV_2B_095.
         # Remove this once Diffusers properly supports loading from the safetensors file.
         if source in (
@@ -168,6 +173,7 @@ def load_vae(
             LtxvModelVersion.LTXV_2B_096_DEV,
             LtxvModelVersion.LTXV_2B_096_DISTILLED,
             LtxvModelVersion.LTXV_13B_097_DEV,
+            LtxvModelVersion.LTXV_13B_097_DISTILLED,
         ):
             return AutoencoderKLLTXVideo.from_pretrained(
                 LtxvModelVersion.LTXV_2B_095.hf_repo,
@@ -216,7 +222,10 @@ def load_transformer(
 
     if isinstance(source, LtxvModelVersion):
         # Special case for LTXV-13B which doesn't yet have a Diffusers config
-        if source == LtxvModelVersion.LTXV_13B_097_DEV:
+        if source in (
+            LtxvModelVersion.LTXV_13B_097_DEV,
+            LtxvModelVersion.LTXV_13B_097_DISTILLED,
+        ):
             return _load_ltxv_13b_transformer(source.safetensors_url, dtype=dtype)
 
         return LTXVideoTransformer3DModel.from_single_file(
