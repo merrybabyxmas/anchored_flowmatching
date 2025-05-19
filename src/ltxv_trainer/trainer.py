@@ -773,6 +773,8 @@ class LtxvTrainer:
         if not self._config.acceleration.load_text_encoder_in_8bit:
             self._text_encoder.to("cpu")
 
+        rel_outputs_path = output_dir.relative_to(self._config.output_dir)
+        logger.info(f"🎥 Validation samples for step {self._global_step} saved in {rel_outputs_path}")
         return video_paths
 
     @staticmethod
