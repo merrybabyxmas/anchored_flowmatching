@@ -149,6 +149,7 @@ class ImageOrVideoDataset(Dataset):
         self.video_column = video_column
         self.id_token = f"{id_token.strip()} " if id_token else ""
         self.resolution_buckets = resolution_buckets
+        self.relative_paths = []
 
         # Four methods of loading data are supported.
         #   - Using two files containing line-separate captions and relative paths to videos.
@@ -201,6 +202,11 @@ class ImageOrVideoDataset(Dataset):
                     if self.prompts[i].startswith(phrase):
                         self.prompts[i] = self.prompts[i].removeprefix(phrase).strip()
 
+        # Store relative paths for all video paths
+        for video_path in self.video_paths:
+            rel_path = str(video_path.relative_to(self.data_root))
+            self.relative_paths.append(rel_path)
+
         self.video_transforms = transforms.Compose(
             [
                 transforms.Lambda(lambda x: x.clamp_(0, 1)),
@@ -225,6 +231,7 @@ class ImageOrVideoDataset(Dataset):
             return index
 
         prompt = self.id_token + self.prompts[index]
+        relative_path = self.relative_paths[index]
 
         video_path: Path = self.video_paths[index]
         if video_path.suffix.lower() in [".png", ".jpg", ".jpeg"]:
@@ -236,6 +243,7 @@ class ImageOrVideoDataset(Dataset):
         return {
             "prompt": prompt,
             "video": video,
+            "relative_paths": relative_path,
             "video_metadata": {
                 "num_frames": video.shape[0],
                 "height": video.shape[2],
@@ -346,7 +354,6 @@ class ImageOrVideoDataset(Dataset):
 class ImageOrVideoDatasetWithResizing(ImageOrVideoDataset):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-
         self.max_num_frames = max(self.resolution_buckets, key=lambda x: x[0])[0]
 
     def _preprocess_image(self, path: Path) -> torch.Tensor:
@@ -429,6 +436,7 @@ class ImageOrVideoDatasetWithResizeAndRectangleCrop(ImageOrVideoDataset):
         # Update video paths and prompts to only include valid ones
         self.video_paths = [self.video_paths[i] for i in valid_indices]
         self.prompts = [self.prompts[i] for i in valid_indices]
+        self.relative_paths = [self.relative_paths[i] for i in valid_indices]
 
         if len(self.video_paths) < original_length:
             logger.warning(
@@ -542,15 +550,33 @@ class PrecomputedDataset(Dataset):
                 f"Make sure you've run the preprocessing step.",
             )
 
-        # Check if directories are empty
-        if not list(self.latents_path.iterdir()):
-            raise ValueError(f"Precomputed latents directory is empty: {self.latents_path}")
+        # Recursively search for latent and embedding files in nested folders
+        latent_files = list(self.latents_path.glob("**/*.pt"))
+        if not latent_files:
+            raise ValueError(f"No latent files found in {self.latents_path}")
 
-        if not list(self.conditions_path.iterdir()):
-            raise ValueError(f"Precomputed conditions directory is empty: {self.conditions_path}")
+        # For each latent file, find the corresponding text embedding file with the same relative path
+        self.latent_conditions = []
+        self.text_conditions = []
+        for latent_file in latent_files:
+            # Handle both old and new preprocessing script formats
+            rel_path = latent_file.relative_to(self.latents_path)
 
-        self.latent_conditions = sorted([p.name for p in self.latents_path.iterdir()])
-        self.text_conditions = sorted([p.name for p in self.conditions_path.iterdir()])
+            if latent_file.name.startswith("latent_"):
+                # Old format: latent_X.pt -> condition_X.pt
+                condition_file = self.conditions_path / f"condition_{latent_file.stem[7:]}.pt"
+            else:
+                # New format: same relative path in both directories
+                condition_file = self.conditions_path / rel_path
+
+            if condition_file.exists():
+                self.latent_conditions.append(rel_path)
+                self.text_conditions.append(condition_file.relative_to(self.conditions_path))
+            else:
+                logger.warning(f"No matching condition file found for latent file: {latent_file.name}")
+
+        if not self.latent_conditions:
+            raise ValueError("No matching latent and condition files found.")
 
         assert len(self.latent_conditions) == len(self.text_conditions), "Number of captions and videos do not match"
 

@@ -183,11 +183,9 @@ class DatasetPreprocessor:
                 total=len(dataloader),
             )
 
-            for batch_idx, batch in enumerate(dataloader):
+            for batch in dataloader:
                 self._process_batch(
                     batch=batch,
-                    batch_idx=batch_idx,
-                    batch_size=args.batch_size,
                     latents_dir=latents_dir,
                     conditions_dir=conditions_dir,
                     output_base=output_base,
@@ -256,8 +254,6 @@ class DatasetPreprocessor:
     def _process_batch(
         self,
         batch: dict[str, Any],
-        batch_idx: int,
-        batch_size: int,
         latents_dir: Path,
         conditions_dir: Path,
         output_base: Path,
@@ -281,9 +277,19 @@ class DatasetPreprocessor:
 
         # Save each item in the batch
         for i in range(len(batch["prompt"])):
-            file_idx = batch_idx * batch_size + i
-            latent_path = latents_dir / f"latent_{file_idx:08d}.pt"
-            condition_path = conditions_dir / f"condition_{file_idx:08d}.pt"
+            # Get relative path and create output directories maintaining structure
+            rel_path = Path(batch["relative_paths"][i])
+            rel_dir = rel_path.parent
+
+            # Create output directories
+            latent_subdir = latents_dir / rel_dir
+            condition_subdir = conditions_dir / rel_dir
+            latent_subdir.mkdir(parents=True, exist_ok=True)
+            condition_subdir.mkdir(parents=True, exist_ok=True)
+
+            # Save files with original name
+            latent_path = latent_subdir / f"{rel_path.stem}.pt"
+            condition_path = condition_subdir / f"{rel_path.stem}.pt"
 
             fps = batch["video_metadata"]["fps"][i].item()
             latent_item = {
@@ -303,7 +309,7 @@ class DatasetPreprocessor:
 
             # Decode video/image if requested
             if decode_videos:
-                decoded_dir = output_base / "decoded_videos"
+                decoded_dir = output_base / "decoded_videos" / rel_dir
                 decoded_dir.mkdir(parents=True, exist_ok=True)
 
                 video = decode_video(
@@ -322,13 +328,13 @@ class DatasetPreprocessor:
                 # For single frame (images), save as PNG, otherwise as MP4
                 is_image = video.shape[0] == 1
                 if is_image:
-                    output_path = decoded_dir / f"image_{file_idx:08d}.png"
+                    output_path = decoded_dir / f"{rel_path.stem}.png"
                     torchvision.utils.save_image(
                         video[0].permute(2, 0, 1) / 255.0,  # [H,W,C] -> [C,H,W] and normalize
                         str(output_path),
                     )
                 else:
-                    output_path = decoded_dir / f"video_{file_idx:08d}.mp4"
+                    output_path = decoded_dir / f"{rel_path.stem}.mp4"
                     torchvision.io.write_video(
                         str(output_path),
                         video.cpu(),
