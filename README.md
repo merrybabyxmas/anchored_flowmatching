@@ -303,7 +303,7 @@ runs the training loop with progress tracking, generates validation videos (if c
 For LoRA training, the weights will be saved as `lora_weights.safetensors` in your output directory.
 For full model fine-tuning, the weights will be saved as `model_weights.safetensors`.
 
-## 🖥️ Distributed / Multi-GPU Training
+### 🖥️ Distributed / Multi-GPU Training
 
 For larger training jobs, you can run the trainer across multiple GPUs on a single machine using our
 distributed training script, which leverages [Hugging Face Accelerate](https://huggingface.co/docs/accelerate/index).
