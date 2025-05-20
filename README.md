@@ -105,11 +105,27 @@ Use the directory containing your video clips (either from step 1, or your own c
 ```bash
 # Generate captions for all videos in the scenes directory
 python scripts/caption_videos.py scenes_output_dir/ \
-    --output scenes_output_dir/captions.json \
-    --captioner-type llava_next_7b
+    --output scenes_output_dir/captions.json
 ```
 
-This will create a captions.json file which contains video paths and their captions
+By default, the script uses the Qwen2.5-VL model for captioning. If you're running into VRAM issues:
+
+1. Try enabling 8-bit quantization to reduce memory usage:
+```bash
+python scripts/caption_videos.py scenes_output_dir/ \
+    --output scenes_output_dir/captions.json \
+    --use-8bit
+```
+
+2. If still encountering memory issues, switch to the LLaVA-NeXT model which has lower VRAM requirements:
+```bash
+python scripts/caption_videos.py scenes_output_dir/ \
+    --output scenes_output_dir/captions.json \
+    --captioner-type llava_next_7b \
+    --use-8bit
+```
+
+This will create a captions.json file which contains video paths and their captions.
 This JSON file will be used as input for the data preprocessing step.
 
 #### 3. Dataset Preprocessing (`preprocess_dataset.py`)

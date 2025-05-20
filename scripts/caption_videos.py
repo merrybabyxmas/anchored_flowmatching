@@ -388,10 +388,11 @@ def main(  # noqa: PLR0913
         help="Path to output file for captions. Format determined by file extension.",
     ),
     captioner_type: CaptionerType = typer.Option(  # noqa: B008
-        CaptionerType.LLAVA_NEXT_7B,
+        CaptionerType.QWEN_25_VL,
         "--captioner-type",
         "-c",
-        help="Type of captioner to use",
+        help="Type of captioner to use. Valid values: 'llava_next_7b', 'qwen_25_vl'",
+        case_sensitive=False,
     ),
     device: str | None = typer.Option(
         None,
@@ -441,8 +442,23 @@ def main(  # noqa: PLR0913
 ) -> None:
     """Auto-caption videos and images using vision-language models.
 
-    This tool can process individual video/image files or directories of media files and generate
-    captions using a vision-language model. The captions can be saved in various formats.
+    This script supports both LLaVA-NeXT and Qwen2.5-VL models for generating captions.
+    The paths in the output file will be relative to the output file's directory.
+
+    Examples:
+        # Caption using LLaVA-NeXT (default)
+        caption_videos.py video.mp4 -o captions.txt
+
+        # Caption using Qwen2.5-VL
+        caption_videos.py video.mp4 -o captions.txt -c qwen_25_vl
+
+        # Caption with custom instruction (especially useful for Qwen)
+        caption_videos.py video.mp4 -o captions.txt -c qwen_25_vl -i "Describe this video in detail"
+
+    Valid captioner types:
+        qwen_25_vl: Qwen2.5-VL-7B model (default)
+        llava_next_7b: LLaVA-NeXT-7B model (default)
+
     """
 
     # Determine device
