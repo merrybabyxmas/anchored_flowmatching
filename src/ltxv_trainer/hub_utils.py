@@ -4,11 +4,11 @@ from typing import List, Union
 
 import imageio
 from huggingface_hub import HfApi, create_repo
-from loguru import logger
 
+from ltxv_trainer import logger
 from ltxv_trainer.config import LtxvTrainerConfig
 from ltxv_trainer.model_loader import try_parse_version
-from scripts.convert_checkpoint import convert_checkpoint
+from ltxv_trainer.utils import convert_checkpoint
 
 
 def convert_video_to_gif(video_path: Path, output_path: Path) -> None:
@@ -32,7 +32,6 @@ def convert_video_to_gif(video_path: Path, output_path: Path) -> None:
         reader.close()
     except Exception as e:
         logger.error(f"Failed to convert video to GIF: {e}")
-        return None
 
 
 def create_model_card(
