@@ -67,6 +67,11 @@ flow_matching:
   timestep_sampling_mode: "shifted_logit_normal" # Options: "uniform", "shifted_logit_normal"
   timestep_sampling_params: {}
 
+# HuggingFace Hub configuration
+hub:
+  push_to_hub: false # Whether to push the model weights to the Hugging Face Hub
+  hub_model_id: null # Hugging Face Hub repository ID (e.g., 'username/repo-name'). Must be provided if `push_to_hub` is set to True
+
 # General configuration
 seed: 42
 output_dir: "outputs/ltxv_lora"
