@@ -111,4 +111,3 @@ def convert_checkpoint(input_path: str, output_path: str, to_comfy: bool = True)
 
     # Save the converted state dict
     save_file(converted_state_dict, output_path)
-    rich.print(f"Converted {replaced_count} keys from '{source_prefix}' to '{target_prefix}'")

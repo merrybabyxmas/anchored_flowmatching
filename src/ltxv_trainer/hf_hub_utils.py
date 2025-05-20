@@ -1,9 +1,12 @@
+import shutil
 import tempfile
 from pathlib import Path
 from typing import List, Union
 
 import imageio
 from huggingface_hub import HfApi, create_repo
+from huggingface_hub.utils import are_progress_bars_disabled, disable_progress_bars, enable_progress_bars
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from ltxv_trainer import logger
 from ltxv_trainer.config import LtxvTrainerConfig
@@ -11,7 +14,90 @@ from ltxv_trainer.model_loader import try_parse_version
 from ltxv_trainer.utils import convert_checkpoint
 
 
-def convert_video_to_gif(video_path: Path, output_path: Path) -> None:
+def push_to_hub(weights_path: Path, sampled_videos_paths: List[Path], config: LtxvTrainerConfig) -> None:
+    """Push the trained LoRA weights to HuggingFace Hub."""
+    if not config.hub.hub_model_id:
+        logger.warning("⚠️ HuggingFace hub_model_id not specified, skipping push to hub")
+        return
+
+    api = HfApi()
+
+    # Save original progress bar state
+    original_progress_state = are_progress_bars_disabled()
+    disable_progress_bars()  # Disable during our custom progress tracking
+
+    try:
+        # Try to create repo if it doesn't exist
+        try:
+            repo = create_repo(
+                repo_id=config.hub.hub_model_id,
+                repo_type="model",
+                exist_ok=True,  # Don't raise error if repo exists
+            )
+            repo_id = repo.repo_id
+            logger.info(f"🤗 Successfully created HuggingFace model repository at: {repo.url}")
+        except Exception as e:
+            logger.error(f"❌ Failed to create HuggingFace model repository: {e}")
+            return
+
+        # Create a single temporary directory for all files
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                transient=True,
+            ) as progress:
+                try:
+                    # Copy original weights
+                    task_copy = progress.add_task("Copying original weights...", total=None)
+                    weights_dest = temp_path / weights_path.name
+                    shutil.copy2(weights_path, weights_dest)
+                    progress.update(task_copy, description="✓ Original weights copied")
+
+                    # Convert and save ComfyUI version
+                    task_convert = progress.add_task("Converting to ComfyUI format...", total=None)
+                    comfy_filename = f"comfyui_{weights_path.name}"
+                    comfy_path = temp_path / comfy_filename
+
+                    convert_checkpoint(
+                        input_path=str(weights_path),
+                        to_comfy=True,
+                        output_path=str(comfy_path),
+                    )
+                    progress.update(task_convert, description="✓ ComfyUI conversion complete")
+
+                    # Create model card and save samples
+                    task_card = progress.add_task("Creating model card and samples...", total=None)
+                    _create_model_card(
+                        output_dir=temp_path,
+                        videos=sampled_videos_paths,
+                        config=config,
+                    )
+                    progress.update(task_card, description="✓ Model card and samples created")
+
+                    # Upload everything at once
+                    task_upload = progress.add_task("Pushing files to HuggingFace Hub...", total=None)
+                    api.upload_folder(
+                        folder_path=str(temp_path),
+                        repo_id=repo_id,
+                        repo_type="model",
+                    )
+                    progress.update(task_upload, description="✓ Files pushed to HuggingFace Hub")
+                    logger.info("✅ Successfully pushed files to HuggingFace Hub")
+
+                except Exception as e:
+                    logger.error(f"❌ Failed to process and push files to HuggingFace Hub: {e}")
+                    raise  # Re-raise to handle in outer try block
+
+    finally:
+        # Restore original progress bar state
+        if not original_progress_state:
+            enable_progress_bars()
+
+
+def _convert_video_to_gif(video_path: Path, output_path: Path) -> None:
     """Convert a video file to GIF format."""
     try:
         # Read the video file
@@ -34,7 +120,7 @@ def convert_video_to_gif(video_path: Path, output_path: Path) -> None:
         logger.error(f"Failed to convert video to GIF: {e}")
 
 
-def create_model_card(
+def _create_model_card(
     output_dir: Union[str, Path],
     videos: List[Path],
     config: LtxvTrainerConfig,
@@ -87,7 +173,7 @@ def create_model_card(
                 # Convert video to GIF
                 gif_path = samples_dir / f"sample_{i}.gif"
                 try:
-                    convert_video_to_gif(video, gif_path)
+                    _convert_video_to_gif(video, gif_path)
 
                     # Create grid cell with collapsible description
                     cell = (
@@ -139,95 +225,3 @@ def create_model_card(
     model_card_path.write_text(model_card_content)
 
     return model_card_path
-
-
-def push_to_hub(weights_path: Path, sampled_videos_paths: List[Path], config: LtxvTrainerConfig) -> None:
-    """Push the trained LoRA weights to HuggingFace Hub."""
-    if not config.hub.push_to_hub:
-        return
-
-    if not config.hub.hub_model_id:
-        logger.warning("⚠️ HuggingFace hub_model_id not specified, skipping push to hub")
-        return
-
-    api = HfApi()
-
-    # Try to create repo if it doesn't exist
-    try:
-        create_repo(
-            repo_id=config.hub.hub_model_id,
-            repo_type="model",
-            exist_ok=True,  # Don't raise error if repo exists
-        )
-    except Exception as e:
-        logger.error(f"❌ Failed to create repository: {e}")
-        return
-
-    # Upload the original weights file
-    try:
-        api.upload_file(
-            path_or_fileobj=str(weights_path),
-            path_in_repo=weights_path.name,
-            repo_id=config.hub.hub_model_id,
-            repo_type="model",
-        )
-    except Exception as e:
-        logger.error(f"❌ Failed to push {weights_path.name} to HuggingFace Hub: {e}")
-    # Create a temporary directory for the files we want to upload
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-
-        try:
-            # Save model card and copy videos to temp directory
-            create_model_card(
-                output_dir=temp_path,
-                videos=sampled_videos_paths,
-                config=config,
-            )
-
-            # Upload the model card and samples directory
-            api.upload_folder(
-                folder_path=str(temp_path),  # Convert to string for compatibility
-                repo_id=config.hub.hub_model_id,
-                repo_type="model",
-            )
-
-            logger.info(f"✅ Successfully uploaded model card and sample videos to {config.hub.hub_model_id}")
-        except Exception as e:
-            logger.error(f"❌ Failed to save/upload model card and videos: {e}")
-
-    logger.info(f"✅ Successfully pushed original LoRA weights to {config.hub.hub_model_id}")
-
-    # Convert and upload ComfyUI version
-    try:
-        # Create a temporary directory for the converted file
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Convert the weights to ComfyUI format
-            comfy_path = Path(temp_dir) / f"{weights_path.stem}_comfy{weights_path.suffix}"
-
-            convert_checkpoint(
-                input_path=str(weights_path),
-                to_comfy=True,
-                output_path=str(comfy_path),
-            )
-
-            # Find the converted file
-            converted_files = list(Path(temp_dir).glob("*.safetensors"))
-            if not converted_files:
-                logger.warning("⚠️ No converted ComfyUI weights found")
-                return
-
-            converted_file = converted_files[0]
-            comfy_filename = f"comfyui_{weights_path.name}"
-
-            # Upload the converted file
-            api.upload_file(
-                path_or_fileobj=str(converted_file),
-                path_in_repo=comfy_filename,
-                repo_id=config.hub.hub_model_id,
-                repo_type="model",
-            )
-            logger.info(f"✅ Successfully pushed ComfyUI LoRA weights to {config.hub.hub_model_id}")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to convert and push ComfyUI version: {e}")

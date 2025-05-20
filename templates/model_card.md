@@ -1,3 +1,15 @@
+---
+tags:
+- ltx-video
+- image-to-video
+pinned: true
+language:
+- en
+license: other
+pipeline_tag: text-to-video
+library_name: diffusers
+---
+
 # {model_name}
 
 This is a fine-tuned version of [`{base_model}`]({base_model_link}) trained on custom data.

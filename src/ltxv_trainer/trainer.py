@@ -47,7 +47,7 @@ from torch.utils.data import DataLoader
 from ltxv_trainer import logger
 from ltxv_trainer.config import LtxvTrainerConfig
 from ltxv_trainer.datasets import PrecomputedDataset
-from ltxv_trainer.hub_utils import push_to_hub
+from ltxv_trainer.hf_hub_utils import push_to_hub
 from ltxv_trainer.model_loader import load_ltxv_components
 from ltxv_trainer.quantization import quantize_model
 from ltxv_trainer.timestep_samplers import SAMPLERS
@@ -289,48 +289,48 @@ class LtxvTrainer:
                         current_mem = get_gpu_memory_gb(device)
                         peak_mem_during_training = max(peak_mem_during_training, current_mem)
 
-            # Collect final stats
-            train_end_time = time.time()
-            end_mem = get_gpu_memory_gb(device)
-            peak_mem = max(start_mem, end_mem, peak_mem_during_training)
+        # Collect final stats
+        train_end_time = time.time()
+        end_mem = get_gpu_memory_gb(device)
+        peak_mem = max(start_mem, end_mem, peak_mem_during_training)
 
-            # Calculate steps/second excluding compilation time if needed
-            if cfg.acceleration.compile_with_inductor:
-                training_time = train_end_time - actual_training_start
-                steps_per_second = (cfg.optimization.steps - COMPILE_WARMUP_STEPS) / training_time
-            else:
-                training_time = train_end_time - train_start_time
-                steps_per_second = cfg.optimization.steps / training_time
+        # Calculate steps/second excluding compilation time if needed
+        if cfg.acceleration.compile_with_inductor:
+            training_time = train_end_time - actual_training_start
+            steps_per_second = (cfg.optimization.steps - COMPILE_WARMUP_STEPS) / training_time
+        else:
+            training_time = train_end_time - train_start_time
+            steps_per_second = cfg.optimization.steps / training_time
 
-            samples_per_second = steps_per_second * self._accelerator.num_processes * cfg.optimization.batch_size
+        samples_per_second = steps_per_second * self._accelerator.num_processes * cfg.optimization.batch_size
 
-            stats = TrainingStats(
-                total_time_seconds=train_end_time - train_start_time,
-                training_time=training_time,
-                compilation_time_seconds=compilation_time,
-                steps_per_second=steps_per_second,
-                samples_per_second=samples_per_second,
-                peak_gpu_memory_gb=peak_mem,
-                num_processes=self._accelerator.num_processes,
-                global_batch_size=cfg.optimization.batch_size * self._accelerator.num_processes,
-            )
+        stats = TrainingStats(
+            total_time_seconds=train_end_time - train_start_time,
+            training_time=training_time,
+            compilation_time_seconds=compilation_time,
+            steps_per_second=steps_per_second,
+            samples_per_second=samples_per_second,
+            peak_gpu_memory_gb=peak_mem,
+            num_processes=self._accelerator.num_processes,
+            global_batch_size=cfg.optimization.batch_size * self._accelerator.num_processes,
+        )
 
-            train_progress.remove_task(task)
-            self._accelerator.end_training()
+        train_progress.remove_task(task)
+        self._accelerator.end_training()
 
-            if IS_MAIN_PROCESS:
-                saved_path = self._save_checkpoint()
+        if IS_MAIN_PROCESS:
+            saved_path = self._save_checkpoint()
 
-                # Upload artifacts to hub if enabled
-                if cfg.hub.push_to_hub:
-                    push_to_hub(saved_path, sampled_videos_paths, self._config)
+            # Upload artifacts to hub if enabled
+            if cfg.hub.push_to_hub:
+                push_to_hub(saved_path, sampled_videos_paths, self._config)
 
-                # Log the training statistics
-                self._log_training_stats(stats)
+            # Log the training statistics
+            self._log_training_stats(stats)
 
-            self._accelerator.end_training()
+        self._accelerator.end_training()
 
-            return saved_path, stats
+        return saved_path, stats
 
     def _training_step(self, batch: dict[str, dict[str, Tensor]]) -> Tensor:
         """Perform a single training step."""
@@ -780,19 +780,20 @@ class LtxvTrainer:
     @staticmethod
     def _log_training_stats(stats: TrainingStats) -> None:
         """Log training statistics."""
-        logger.info("📊 Training Statistics:")
-        logger.info(f"Total time: {stats.total_time_seconds / 60:.1f} minutes")
-        logger.info(f"Training time: {stats.training_time / 60:.1f} minutes")
+        stats_str = (
+            "📊 Training Statistics:\n"
+            f" - Total time: {stats.total_time_seconds / 60:.1f} minutes\n"
+            f" - Training time: {stats.training_time / 60:.1f} minutes\n"
+            f" - Training speed: {stats.steps_per_second:.2f} steps/second\n"
+            f" - Samples/second: {stats.samples_per_second:.2f}\n"
+            f" - Peak GPU memory: {stats.peak_gpu_memory_gb:.2f} GB"
+        )
         if stats.compilation_time_seconds is not None:
-            logger.info(f"Compilation time: {stats.compilation_time_seconds:.1f} seconds")
-        logger.info(f"Training speed: {stats.steps_per_second:.2f} steps/second")
-        logger.info(f"Samples/second: {stats.samples_per_second:.2f}")
-        logger.info(f"Peak GPU memory: {stats.peak_gpu_memory_gb:.2f} GB")
-
-        # Add logging for distributed training
+            stats_str += f"\n - Compilation time: {stats.compilation_time_seconds:.1f} seconds\n"
         if stats.num_processes > 1:
-            logger.info(f"Number of processes: {stats.num_processes}")
-            logger.info(f"Global batch size: {stats.global_batch_size}")
+            stats_str += f"\n - Number of processes: {stats.num_processes}\n"
+            stats_str += f" - Global batch size: {stats.global_batch_size}"
+        logger.info(stats_str)
 
     def _save_checkpoint(self) -> Path:
         """Save the model weights."""
