@@ -1,4 +1,4 @@
-import itertools  # noqa: I001
+import itertools
 from abc import ABC, abstractmethod
 from enum import Enum
 from pathlib import Path
@@ -12,13 +12,6 @@ from transformers import (
     LlavaNextVideoForConditionalGeneration,
     Qwen2_5_VLForConditionalGeneration,
 )
-import numpy as np
-
-# Should be imported after `torch` to avoid compatibility issues.import decord
-import decord  # type: ignore
-from ltxv_trainer.utils import open_image_as_srgb
-
-decord.bridge.set_bridge("torch")
 
 DEFAULT_VLM_CAPTION_INSTRUCTION = "Shortly describe the content of this video in two sentences."
 
@@ -63,22 +56,6 @@ class MediaCaptioningModel(ABC):
         """
 
     @staticmethod
-    def _read_video_frames(video_path: Union[str, Path], sampling_factor: int = 8) -> torch.Tensor:
-        """Read frames from a video file."""
-        video_reader = decord.VideoReader(uri=str(video_path))
-        total_frames = len(video_reader)
-        indices = list(range(0, total_frames, total_frames // sampling_factor))
-        frames = video_reader.get_batch(indices)
-        return frames
-
-    @staticmethod
-    def _read_image(image_path: Union[str, Path]) -> torch.Tensor:
-        """Read an image file and convert to tensor format."""
-        image = open_image_as_srgb(image_path)
-        image_tensor = torch.from_numpy(np.array(image))
-        return image_tensor
-
-    @staticmethod
     def _is_image_file(path: Union[str, Path]) -> bool:
         """Check if the file is an image based on extension."""
         return str(path).lower().endswith((".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp"))
@@ -121,15 +98,14 @@ class TransformersVlmCaptioner(MediaCaptioningModel):
     def caption(
         self,
         path: Union[str, Path],
-        frames_sampling_factor: int = 8,
+        fps: int = 3,
         clean_caption: bool = True,
     ) -> str:
         """Generate a caption for the given video or image.
 
         Args:
             path: Path to the video/image file to caption
-            frames_sampling_factor: Factor to sample frames from the video, i.e. every
-                `frames_sampling_factor`-th frame will be used (ignored for images).
+            fps: Frames per second of the video, ignored for images.
             clean_caption: Whether to clean up the raw caption by removing common VLM patterns.
 
         Returns:
@@ -138,25 +114,23 @@ class TransformersVlmCaptioner(MediaCaptioningModel):
         # Determine if input is image or video
         is_image = self._is_image_file(path)
 
-        # Read input file
-        media = self._read_image(path) if is_image else self._read_video_frames(path, frames_sampling_factor)
         # Prepare inputs
         conversation = [
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": self.vlm_instruction},
-                    {"type": "video" if not is_image else "image"},
+                    {"type": "image" if is_image else "video", "path": str(path)},
                 ],
-            },
+            }
         ]
 
-        prompt = self.processor.apply_chat_template(conversation, add_generation_prompt=True)
-        inputs = self.processor(
-            text=prompt,
-            videos=media if not is_image else None,
-            images=media if is_image else None,
-            padding=True,
+        inputs = self.processor.apply_chat_template(
+            conversation,
+            video_fps=fps if not is_image else None,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
             return_tensors="pt",
         ).to(self.device)
 
@@ -170,12 +144,7 @@ class TransformersVlmCaptioner(MediaCaptioningModel):
 
         # Trim the generated tokens to exclude the input tokens
         output_tokens_trimmed = [
-            out_ids[len(in_ids) :]
-            for in_ids, out_ids in zip(
-                inputs.input_ids,
-                output_tokens,
-                strict=False,
-            )
+            out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, output_tokens, strict=True)
         ]
 
         # Decode the generated tokens to text
@@ -207,7 +176,12 @@ class TransformersVlmCaptioner(MediaCaptioningModel):
             device_map=self.device.type,
         )
 
-        self.processor = AutoProcessor.from_pretrained(model_id, use_fast=True)
+        self.processor = AutoProcessor.from_pretrained(
+            model_id,
+            use_fast=True,
+            min_pixels=16 * 28 * 28,
+            max_pixels=64 * 28 * 28,
+        )
 
 
 def example() -> None:

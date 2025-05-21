@@ -83,7 +83,7 @@ def caption_media(
     captioner: MediaCaptioningModel,
     extensions: list[str],
     recursive: bool,
-    frames_sampling_factor: int,
+    fps: int,
     clean_caption: bool,
     output_format: OutputFormat,
     override: bool,
@@ -95,7 +95,7 @@ def caption_media(
         captioner: Video captioning model
         extensions: List of video file extensions to include
         recursive: Whether to search subdirectories recursively
-        frames_sampling_factor: Factor to sample frames from videos
+        fps: Frames per second to sample from videos (ignored for images)
         clean_caption: Whether to clean up captions
         output_format: Format to save the captions in
         override: Whether to override existing captions
@@ -170,7 +170,7 @@ def caption_media(
                 # Generate caption for the media
                 caption = captioner.caption(
                     path=media_file,
-                    frames_sampling_factor=frames_sampling_factor,
+                    fps=fps,
                     clean_caption=clean_caption,
                 )
 
@@ -423,11 +423,11 @@ def main(  # noqa: PLR0913
         "-r",
         help="Search for media files in subdirectories recursively",
     ),
-    frames_sampling_factor: int = typer.Option(
-        8,
-        "--frames-sampling-factor",
+    fps: int = typer.Option(
+        3,
+        "--fps",
         "-f",
-        help="Factor to sample frames from media (higher means fewer frames)",
+        help="Frames per second to sample from videos (ignored for images)",
     ),
     clean_caption: bool = typer.Option(
         True,
@@ -501,7 +501,7 @@ def main(  # noqa: PLR0913
         captioner=captioner,
         extensions=ext_list,
         recursive=recursive,
-        frames_sampling_factor=frames_sampling_factor,
+        fps=fps,
         clean_caption=clean_caption,
         output_format=output_format,
         override=override,
