@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from ltxv_trainer.model_loader import LtxvModelVersion
 from ltxv_trainer.quantization import QuantizationOptions
@@ -231,9 +231,9 @@ class ValidationConfig(ConfigBaseModel):
 
     @field_validator("images")
     @classmethod
-    def validate_num_images(cls, v: list[str] | None, values: dict) -> list[str] | None:
+    def validate_num_images(cls, v: list[str] | None, info: ValidationInfo) -> list[str] | None:
         """Validate that number of images (if provided) matches number of prompts."""
-        num_prompts = len(values.get("prompts", []))
+        num_prompts = len(info.data.get("prompts", []))
         if v is not None and len(v) != num_prompts:
             raise ValueError(f"Number of images ({len(v)}) must match number of prompts ({num_prompts})")
         return v
