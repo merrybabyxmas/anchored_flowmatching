@@ -55,7 +55,7 @@ def open_image_as_srgb(image_path: str | Path | io.BytesIO) -> PilImage:
             color_space_value = exif_data.get(ExifTags.Base.ColorSpace.value)
             EXIF_COLORSPACE_SRGB = 1  # noqa: N806
             if color_space_value is None:
-                logger.info(
+                logger.debug(
                     f"Opening image file '{image_path}' that has no ICC profile and EXIF has no"
                     " ColorSpace tag, assuming sRGB",
                 )

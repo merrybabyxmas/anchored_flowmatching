@@ -185,15 +185,28 @@ def load_vae(
             torch_dtype=dtype,
         )
     elif isinstance(source, (str, Path)):
-        if _is_huggingface_repo(source):
+        if _is_safetensors_url(source):
+            try:
+                return AutoencoderKLLTXVideo.from_single_file(
+                    source,
+                    torch_dtype=dtype,
+                )
+            except ValueError as e:
+                if "Cannot load  because encoder.conv_out.conv.weight" in str(e):
+                    # This is a special case for newer VAEs which must be loaded
+                    # from the Diffusers folder-format instead of safetensors.
+                    # Remove this once Diffusers properly supports loading from the safetensors file.
+                    return AutoencoderKLLTXVideo.from_pretrained(
+                        LtxvModelVersion.LTXV_2B_095.hf_repo,
+                        subfolder="vae",
+                        torch_dtype=dtype,
+                    )
+                else:
+                    raise e
+        elif _is_huggingface_repo(source):
             return AutoencoderKLLTXVideo.from_pretrained(
                 source,
                 subfolder="vae",
-                torch_dtype=dtype,
-            )
-        elif _is_safetensors_url(source):
-            return AutoencoderKLLTXVideo.from_single_file(
-                source,
                 torch_dtype=dtype,
             )
 
@@ -233,15 +246,23 @@ def load_transformer(
             torch_dtype=dtype,
         )
     elif isinstance(source, (str, Path)):
-        if _is_huggingface_repo(source):
+        if _is_safetensors_url(source):
+            try:
+                return LTXVideoTransformer3DModel.from_single_file(
+                    source,
+                    torch_dtype=dtype,
+                )
+            except ValueError as e:
+                if "Cannot load  because time_embed.emb.timestep_embedder.linear_1.bias" in str(e):
+                    # This is a special case for newer LTXV 13B transformers which must be loaded with a custom config.
+                    # Remove this once Diffusers properly supports the new model.
+                    return _load_ltxv_13b_transformer(source, dtype=dtype)
+                else:
+                    raise e
+        elif _is_huggingface_repo(source):
             return LTXVideoTransformer3DModel.from_pretrained(
                 source,
                 subfolder="transformer",
-                torch_dtype=dtype,
-            )
-        elif _is_safetensors_url(source):
-            return LTXVideoTransformer3DModel.from_single_file(
-                source,
                 torch_dtype=dtype,
             )
 

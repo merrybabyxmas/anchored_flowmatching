@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from unittest.mock import MagicMock
 
+import rich
 import torch
 from accelerate import Accelerator
 from accelerate.utils import set_seed
@@ -18,7 +19,6 @@ from peft import LoraConfig, get_peft_model_state_dict
 from peft.tuners.tuners_utils import BaseTunerLayer
 from peft.utils import ModulesToSaveWrapper
 from pydantic import BaseModel
-from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
@@ -90,7 +90,6 @@ class TrainingStats(BaseModel):
 class LtxvTrainer:
     def __init__(self, trainer_config: LtxvTrainerConfig) -> None:
         self._config = trainer_config
-        self._console = Console()
         self._print_config(trainer_config)
         self._setup_accelerator()
         self._load_models()
@@ -436,7 +435,7 @@ class LtxvTrainer:
         for param, value in flatten_config(config):
             table.add_row(param, value)
 
-        self._console.print(table)
+        rich.print(table)
 
     def _load_models(self) -> None:
         """Load the LTXV model components."""
