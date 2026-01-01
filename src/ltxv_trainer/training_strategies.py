@@ -20,6 +20,10 @@ from ltxv_trainer.config import ConditioningConfig
 from ltxv_trainer.ltxv_utils import get_rope_scale_factors, prepare_video_coordinates
 from ltxv_trainer.timestep_samplers import TimestepSampler
 
+from .ring_zipper_flow import FlowMatchingBase, create_flow_matching
+
+
+
 DEFAULT_FPS = 24  # Default frames per second for video missing in the FPS metadata
 
 
@@ -179,6 +183,99 @@ class TrainingStrategy(ABC):
         Returns:
             Scalar loss tensor
         """
+
+
+class RingZipperTrainingStrategy(TrainingStrategy):
+    """
+    사용자의 Ring/Zipper 알고리즘을 LTX-Video 트레이너에 통합한 핵심 전략.
+    """
+    def __init__(self, conditioning_config: ConditioningConfig, t_star: float = 0.8):
+        super().__init__(conditioning_config)
+        self.t_star = t_star
+        # Ring FM 엔진 초기화 (내부에 AnchorNetwork 포함)
+        self.flow_matching = create_flow_matching(
+            method="ring_fm",
+            t_star=t_star,
+            latent_dim=128 # LTX-Video 기본 latent dim, prepare_batch에서 동적 확인
+        )
+
+    def get_data_sources(self) -> list[str]:
+        return ["latents", "conditions"]
+
+    def prepare_batch(self, batch: dict[str, Any], timestep_sampler: TimestepSampler) -> TrainingBatch:
+        # 1. 원본 데이터 추출 (B, Seq, C)
+        latents_info = batch["latents"]
+        x0_seq = latents_info["latents"] 
+        B, S, C = x0_seq.shape
+        
+        F = latents_info["num_frames"][0].item()
+        H = latents_info["height"][0].item()
+        W = latents_info["width"][0].item()
+        fps = latents_info.get("fps", [DEFAULT_FPS])[0].item()
+
+        # 2. Ring FM 연산을 위해 Video Shape로 변환 (B, C, F, H, W)
+        # LTX-Video는 (B, S, C) 형태이므로 텐서 재배열이 필요함
+        x0 = x0_seq.view(B, F, H, W, C).permute(0, 4, 1, 2, 3).contiguous()
+        device = x0.device
+
+        # 3. Ring/Zipper 핵심 파라미터 생성
+        t = timestep_sampler.sample_for(x0_seq).to(device) # (B,)
+        
+        # [원칙 2, 3] Shared Noise 생성 ε ∈ R[B, C, 1, H, W]
+        noise = self.flow_matching.sample_noise(x0.shape).to(device)
+        
+        # [원칙 5] Anchor 계산 (Stochastic Anchor A)
+        anchor, mu, log_sigma2 = self.flow_matching.compute_anchor(x0)
+        
+        # [원칙 6, 7] Piecewise Path 및 Teacher Velocity 계산
+        z_t_vid = self.flow_matching.compute_forward_path(noise, x0, t, anchor=anchor)
+        u_t_vid = self.flow_matching.compute_teacher_velocity(noise, x0, t, anchor=anchor)
+        
+        # 4. 모델 입력을 위해 다시 Sequence 형태로 복구 (B, S, C)
+        z_t_seq = z_t_vid.permute(0, 2, 3, 4, 1).reshape(B, S, C)
+        u_t_seq = u_t_vid.permute(0, 2, 3, 4, 1).reshape(B, S, C)
+
+        # 5. 기타 컨디셔닝 준비 (기존 로직 유지)
+        conditions = batch["conditions"]
+        prompt_embeds = conditions["prompt_embeds"]
+        prompt_attention_mask = conditions["prompt_attention_mask"]
+        
+        # First frame conditioning 지원 (선택 사항)
+        conditioning_mask = torch.zeros(B, S, dtype=torch.bool, device=device)
+        # Ring FM에서는 t_star 이전 단계가 Global이므로 별도의 mask 없이도 일관성이 잡히나, 
+        # 기존 코드와의 호환을 위해 0으로 채운 mask를 넘김
+        
+        sampled_timestep_values = torch.round(t * 1000.0).long()
+        timesteps = sampled_timestep_values.unsqueeze(1).expand(B, S)
+
+        return TrainingBatch(
+            latents=z_t_seq,
+            targets=u_t_seq,
+            prompt_embeds=prompt_embeds,
+            prompt_attention_mask=prompt_attention_mask,
+            timesteps=timesteps,
+            sigmas=t.view(-1, 1, 1),
+            conditioning_mask=conditioning_mask,
+            num_frames=F,
+            height=H,
+            width=W,
+            fps=fps,
+            rope_interpolation_scale=get_rope_scale_factors(fps),
+            anchor=anchor,
+            junction_error=self.flow_matching.verify_junction_constraint(noise, x0, anchor)
+        )
+
+    def compute_loss(self, model_pred: Tensor, batch: TrainingBatch) -> Tensor:
+        """
+        [원칙 8] Piecewise MSE Loss.
+        u_t가 이미 Ring FM 수식에 의해 t < t* (Global)와 t > t* (Local)로 구분되어 계산됨.
+        """
+        loss = (model_pred - batch.targets).pow(2)
+        # Ring FM은 모든 프레임 학습이 중요하므로 mask 없이 전체 평균
+        return loss.mean()
+
+
+
 
 
 class StandardTrainingStrategy(TrainingStrategy):
@@ -439,26 +536,27 @@ class ReferenceVideoTrainingStrategy(TrainingStrategy):
         return loss.mean()
 
 
+
 def get_training_strategy(conditioning_config: ConditioningConfig) -> TrainingStrategy:
-    """Factory function to create the appropriate training strategy.
-
-    Args:
-        conditioning_config: Configuration for conditioning behavior
-
-    Returns:
-        The appropriate training strategy instance
-
-    Raises:
-        ValueError: If conditioning mode is not supported
+    """
+    기존 팩토리 함수에 Ring FM 모드를 추가.
+    config.mode가 "ring_fm"일 때 작동하도록 설정.
     """
     conditioning_mode = conditioning_config.mode
 
-    if conditioning_mode == "none":
+    if conditioning_mode == "ring_fm":
+        # t_star는 config에서 받아오도록 확장 가능
+        t_star = getattr(conditioning_config, "t_star", 0.8)
+        strategy = RingZipperTrainingStrategy(conditioning_config, t_star=t_star)
+        
+    elif conditioning_mode == "none":
+        from .training_strategy import StandardTrainingStrategy
         strategy = StandardTrainingStrategy(conditioning_config)
     elif conditioning_mode == "reference_video":
+        from .training_strategy import ReferenceVideoTrainingStrategy
         strategy = ReferenceVideoTrainingStrategy(conditioning_config)
     else:
         raise ValueError(f"Unknown conditioning mode: {conditioning_mode}")
 
-    logger.debug(f"🎯 Using {strategy.__class__.__name__}")
+    logger.debug(f"🎯 Using {strategy.__class__.__name__} for Ring/Zipper FM")
     return strategy

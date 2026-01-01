@@ -1,0 +1,23 @@
+2025-12-31 17:48:07,053 INFO    MainThread:1580140 [wandb_setup.py:_flush():80] Current SDK version is 0.23.1
+2025-12-31 17:48:07,053 INFO    MainThread:1580140 [wandb_setup.py:_flush():80] Configure stats pid to 1580140
+2025-12-31 17:48:07,053 INFO    MainThread:1580140 [wandb_setup.py:_flush():80] Loading settings from /home/dongwoo38/.config/wandb/settings
+2025-12-31 17:48:07,053 INFO    MainThread:1580140 [wandb_setup.py:_flush():80] Loading settings from /home/dongwoo38/ring_fm/wandb/settings
+2025-12-31 17:48:07,053 INFO    MainThread:1580140 [wandb_setup.py:_flush():80] Loading settings from environment variables
+2025-12-31 17:48:07,053 INFO    MainThread:1580140 [wandb_init.py:setup_run_log_directory():714] Logging user logs to /home/dongwoo38/ring_fm/wandb/run-20251231_174807-dwn4akxo/logs/debug.log
+2025-12-31 17:48:07,053 INFO    MainThread:1580140 [wandb_init.py:setup_run_log_directory():715] Logging internal logs to /home/dongwoo38/ring_fm/wandb/run-20251231_174807-dwn4akxo/logs/debug-internal.log
+2025-12-31 17:48:07,053 INFO    MainThread:1580140 [wandb_init.py:init():841] calling init triggers
+2025-12-31 17:48:07,053 INFO    MainThread:1580140 [wandb_init.py:init():846] wandb.init called with sweep_config: {}
+config: {'model': {'model_source': <LtxvModelVersion.LTXV_2B_096_DEV: 'LTXV_2B_0.9.6_DEV'>, 'training_mode': 'lora', 'load_checkpoint': None}, 'lora': {'rank': 32, 'alpha': 32, 'dropout': 0.05, 'target_modules': ['to_k', 'to_q', 'to_v', 'to_out.0']}, 'conditioning': {'mode': 'ring_fm', 't_star': 0.8, 'first_frame_conditioning_p': 0.1, 'reference_latents_dir': 'ref_latents'}, 'optimization': {'learning_rate': 0.0002, 'steps': 1500, 'batch_size': 1, 'gradient_accumulation_steps': 1, 'max_grad_norm': 1.0, 'optimizer_type': 'adamw8bit', 'scheduler_type': 'linear', 'scheduler_params': {}, 'enable_gradient_checkpointing': True}, 'acceleration': {'mixed_precision_mode': 'bf16', 'quantization': None, 'load_text_encoder_in_8bit': False, 'compile_with_inductor': False, 'compilation_mode': 'reduce-overhead'}, 'data': {'preprocessed_data_root': '/home/dongwoo38/openvid_data', 'num_dataloader_workers': 2}, 'validation': {'prompts': ['a video in the style of the ring animation, a character standing in the rain'], 'negative_prompt': 'worst quality, inconsistent motion, blurry, jittery, distorted', 'images': None, 'reference_videos': None, 'video_dims': (768, 448, 89), 'seed': 42, 'inference_steps': 30, 'interval': 200, 'videos_per_prompt': 1, 'guidance_scale': 3.5, 'skip_initial_validation': False}, 'checkpoints': {'interval': None, 'keep_last_n': 1}, 'hub': {'push_to_hub': False, 'hub_model_id': None}, 'flow_matching': {'timestep_sampling_mode': 'shifted_logit_normal', 'timestep_sampling_params': {}}, 'wandb': {'enabled': True, 'project': 'ltxv-trainer', 'entity': None, 'tags': [], 'log_validation_videos': True}, 'seed': 42, 'output_dir': '/home/dongwoo38/ring_fm/outputs/ring_fm_lora_v1', '_wandb': {}}
+2025-12-31 17:48:07,053 INFO    MainThread:1580140 [wandb_init.py:init():889] starting backend
+2025-12-31 17:48:07,271 INFO    MainThread:1580140 [wandb_init.py:init():892] sending inform_init request
+2025-12-31 17:48:07,276 INFO    MainThread:1580140 [wandb_init.py:init():900] backend started and connected
+2025-12-31 17:48:07,277 INFO    MainThread:1580140 [wandb_init.py:init():970] updated telemetry
+2025-12-31 17:48:07,282 INFO    MainThread:1580140 [wandb_init.py:init():994] communicating run to backend with 90.0 second timeout
+2025-12-31 17:48:08,010 INFO    MainThread:1580140 [wandb_init.py:init():1041] starting run threads in backend
+2025-12-31 17:48:08,082 INFO    MainThread:1580140 [wandb_run.py:_console_start():2521] atexit reg
+2025-12-31 17:48:08,082 INFO    MainThread:1580140 [wandb_run.py:_redirect():2369] redirect: wrap_raw
+2025-12-31 17:48:08,082 INFO    MainThread:1580140 [wandb_run.py:_redirect():2438] Wrapping output streams.
+2025-12-31 17:48:08,082 INFO    MainThread:1580140 [wandb_run.py:_redirect():2461] Redirects installed.
+2025-12-31 17:48:08,085 INFO    MainThread:1580140 [wandb_init.py:init():1081] run started, returning control to user process
+2025-12-31 17:48:11,752 INFO    wandb-AsyncioManager-main:1580140 [service_client.py:_forward_responses():80] Reached EOF.
+2025-12-31 17:48:11,752 INFO    wandb-AsyncioManager-main:1580140 [mailbox.py:close():137] Closing mailbox, abandoning 1 handles.

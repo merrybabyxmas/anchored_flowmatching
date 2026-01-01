@@ -1,0 +1,167 @@
+_wandb:
+    value:
+        cli_version: 0.23.1
+        e:
+            1d8m7d63s1g4hehwf3ju7ytq0u417e3c:
+                args:
+                    - configs/ring_lora_config.yaml
+                codePath: scripts/train.py
+                codePathLocal: scripts/train.py
+                cpu_count: 24
+                cpu_count_logical: 48
+                cudaVersion: "13.0"
+                disk:
+                    /:
+                        total: "1966736678912"
+                        used: "1852429594624"
+                email: yein0330@sogang.ac.kr
+                executable: /home/dongwoo38/miniconda3/envs/ltxv_env/bin/python
+                git:
+                    commit: 31b12733f51cb16b244d23f6552609f369aed883
+                    remote: https://github.com/Lightricks/LTX-Video-Trainer.git
+                gpu: NVIDIA GeForce RTX 4090
+                gpu_count: 4
+                gpu_nvidia:
+                    - architecture: Ada
+                      cudaCores: 16384
+                      memoryTotal: "25757220864"
+                      name: NVIDIA GeForce RTX 4090
+                      uuid: GPU-1a133bd2-ae1e-86f3-56bf-38518f125ad4
+                    - architecture: Ada
+                      cudaCores: 16384
+                      memoryTotal: "25757220864"
+                      name: NVIDIA GeForce RTX 4090
+                      uuid: GPU-6068f209-96d6-139d-80fb-7db74591f8b4
+                    - architecture: Ada
+                      cudaCores: 16384
+                      memoryTotal: "25757220864"
+                      name: NVIDIA GeForce RTX 4090
+                      uuid: GPU-4f8fb1fe-e7c5-aad3-6f94-a16bee1178a0
+                    - architecture: Ada
+                      cudaCores: 16384
+                      memoryTotal: "25757220864"
+                      name: NVIDIA GeForce RTX 4090
+                      uuid: GPU-760bf631-f8cc-ccc4-3350-5f6d4379dbe5
+                host: user-WRX80-Creator
+                memory:
+                    total: "134894039040"
+                os: Linux-6.14.0-36-generic-x86_64-with-glibc2.39
+                program: /home/dongwoo38/ring_fm/scripts/train.py
+                python: CPython 3.10.19
+                root: /home/dongwoo38/ring_fm
+                startedAt: "2025-12-31T08:57:54.102044Z"
+                writerId: 1d8m7d63s1g4hehwf3ju7ytq0u417e3c
+        m: []
+        python_version: 3.10.19
+        t:
+            "1":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 71
+                - 83
+                - 98
+                - 99
+                - 105
+            "2":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 51
+                - 71
+                - 83
+                - 98
+                - 99
+                - 105
+            "3":
+                - 13
+                - 15
+                - 16
+            "4": 3.10.19
+            "5": 0.23.1
+            "6": 5.0.0.dev0
+            "12": 0.23.1
+            "13": linux-x86_64
+acceleration:
+    value:
+        compilation_mode: reduce-overhead
+        compile_with_inductor: false
+        load_text_encoder_in_8bit: false
+        mixed_precision_mode: bf16
+        quantization: null
+checkpoints:
+    value:
+        interval: null
+        keep_last_n: 1
+conditioning:
+    value:
+        first_frame_conditioning_p: 0.1
+        mode: ring_fm
+        reference_latents_dir: ref_latents
+        t_star: 0.8
+data:
+    value:
+        num_dataloader_workers: 2
+        preprocessed_data_root: /home/dongwoo38/openvid_data
+flow_matching:
+    value:
+        timestep_sampling_mode: shifted_logit_normal
+hub:
+    value:
+        hub_model_id: null
+        push_to_hub: false
+lora:
+    value:
+        alpha: 32
+        dropout: 0.05
+        rank: 32
+        target_modules:
+            - to_k
+            - to_q
+            - to_v
+            - to_out.0
+model:
+    value:
+        load_checkpoint: null
+        model_source: LTXV_2B_096_DEV
+        training_mode: lora
+optimization:
+    value:
+        batch_size: 1
+        enable_gradient_checkpointing: true
+        gradient_accumulation_steps: 1
+        learning_rate: 0.0002
+        max_grad_norm: 1
+        optimizer_type: adamw8bit
+        scheduler_type: linear
+        steps: 1500
+output_dir:
+    value: /home/dongwoo38/ring_fm/outputs/ring_fm_lora_v1
+seed:
+    value: 42
+validation:
+    value:
+        guidance_scale: 3.5
+        images: null
+        inference_steps: 30
+        interval: 10
+        negative_prompt: worst quality, inconsistent motion, blurry, jittery, distorted
+        prompts:
+            - a video in the style of the ring animation, a character standing in the rain
+        reference_videos: null
+        seed: 42
+        skip_initial_validation: true
+        video_dims:
+            - 768
+            - 448
+            - 25
+        videos_per_prompt: 1
+wandb:
+    value:
+        enabled: true
+        entity: null
+        log_validation_videos: true
+        project: ltxv-trainer
+        tags: []

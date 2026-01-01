@@ -10,6 +10,9 @@ appropriate configuration.
 Basic usage:
     distributed_train.py configs/ltxv_lora_config.yaml
 """
+import os
+import sys
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 
 import subprocess
 from pathlib import Path
@@ -40,7 +43,6 @@ def main(
     # Get path to the training script
     script_dir = Path(__file__).parent
     training_script = str(script_dir / "train.py")
-
     if num_processes is None:
         # Get number of available GPUs from nvidia-smi
         try:

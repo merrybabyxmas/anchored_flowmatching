@@ -1,0 +1,113 @@
+[32mDEBUG   [0m [1m[[0mrank [1;36m0[0m[1m][0m 🎯 Using RingZipperTrainingStrategy for Ring/Zipper FM                                                                                                                                                                                                  ]8;id=553590;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/training_strategies.py\[2mtraining_strategies.py[0m]8;;\[2m:[0m]8;id=163143;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/training_strategies.py#561\[2m561[0m]8;;\
+[32mDEBUG   [0m [1m[[0mrank [1;36m0[0m[1m][0m Process [1;36m0[0m using seed: [1;36m42[0m                                                                                                                                                                                                                                            ]8;id=256787;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py\[2mtrainer.py[0m]8;;\[2m:[0m]8;id=234053;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py#136\[2m136[0m]8;;\
+[32mDEBUG   [0m [1m[[0mrank [1;36m0[0m[1m][0m Initializing LoRA weights[33m...[0m                                                                                                                                                                                                                                        ]8;id=935518;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py\[2mtrainer.py[0m]8;;\[2m:[0m]8;id=571858;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py#621\[2m621[0m]8;;\
+[32mDEBUG   [0m [1m[[0mrank [1;36m0[0m[1m][0m Loaded dataset with [1;36m500[0m samples from sources: [1m[[0m[32m'latents'[0m, [32m'conditions'[0m[1m][0m                                                                                                                                                                                             ]8;id=98246;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py\[2mtrainer.py[0m]8;;\[2m:[0m]8;id=229258;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py#606\[2m606[0m]8;;\
+[34mINFO    [0m [1m[[0mrank [1;36m0[0m[1m][0m 💾 Training configuration saved to: training_config.yaml                                                                                                                                                                                                            ]8;id=208496;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py\[2mtrainer.py[0m]8;;\[2m:[0m]8;id=750800;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py#878\[2m878[0m]8;;\
+[34mINFO    [0m [1m[[0mrank [1;36m0[0m[1m][0m 🚀 Starting training[33m...[0m                                                                                                                                                                                                                                             ]8;id=471029;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py\[2mtrainer.py[0m]8;;\[2m:[0m]8;id=617889;file:///home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py#154\[2m154[0m]8;;\
+[?25l╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+[2K[1A[2K╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Training Step [32m   0/1500[0m [34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m Loss: 0.0000 LR: 2.00e-04 Time/Step: 0.00s [33m0:00:00[0m ETA: [36m--:--[0m                                                                                                                                                                   │
+[2K[1A[2K[1A[2K╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Training Step [32m   0/1500[0m [34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m Loss: 0.0000 LR: 2.00e-04 Time/Step: 0.00s [33m0:00:01[0m ETA: [36m--:--[0m                                                                                                                                                                   │
+[2K[1A[2K[1A[2K╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Training Step [32m   0/1500[0m [34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m Loss: 0.0000 LR: 2.00e-04 Time/Step: 0.00s [33m0:00:01[0m ETA: [36m--:--[0m                                                                                                                                                                   │
+[2K[1A[2K[1A[2K{'hidden_states': tensor([[[ 0.3700, -0.7633,  0.6448,  ...,  0.4496, -0.6617, -1.3177],───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+         [-1.5991,  1.1629, -0.0466,  ...,  0.1962, -0.2402,  0.2801],
+         [-0.5217, -1.2354, -0.6160,  ...,  0.1929,  0.6950, -0.7131],
+         ...,
+         [ 1.8463,  0.1930, -1.4555,  ..., -0.5399, -1.0306, -0.0939],
+         [-0.0965, -0.7206, -0.4441,  ...,  1.1876, -1.7780, -0.2216],
+         [-0.4659, -0.3589,  0.0595,  ...,  1.7486, -1.5009,  2.7170]]],
+       device='cuda:0', grad_fn=<ReshapeAliasBackward0>), 'encoder_hidden_states': tensor([[[ 0.0198,  0.2891, -0.1221,  ..., -0.1543,  0.0052, -0.0820],
+         [-0.0273,  0.1387,  0.0155,  ...,  0.0288,  0.0151, -0.0408],
+         [-0.1562,  0.0420,  0.1240,  ..., -0.2695,  0.0396,  0.0420],
+         ...,
+         [ 0.1943, -0.0293, -0.1211,  ..., -0.1426, -0.0962, -0.0630],
+         [ 0.2520,  0.0366, -0.1533,  ..., -0.1235, -0.0757, -0.0957],
+         [ 0.0019, -0.0172, -0.1011,  ..., -0.1641, -0.0586, -0.0386]]],
+       device='cuda:0', dtype=torch.bfloat16), 'timestep': tensor([[778, 778, 778,  ..., 778, 778, 778]], device='cuda:0'), 'encoder_attention_mask': tensor([[ True,  True,  True,  True,  True,  True,  True,  True,  True,  True,
+          True,  True,  True,  True,  True,  True,  True,  True,  True,  True,
+          True,  True,  True,  True,  True,  True,  True,  True,  True,  True,
+          True,  True,  True,  True,  True,  True,  True,  True,  True,  True,
+          True,  True,  True,  True,  True,  True,  True,  True,  True,  True,
+          True,  True,  True,  True,  True,  True,  True,  True,  True,  True,
+          True,  True,  True,  True,  True,  True,  True,  True,  True,  True,
+          True,  True,  True,  True,  True,  True,  True,  True,  True,  True,
+          True,  True,  True,  True,  True,  True,  True,  True,  True,  True,
+          True,  True,  True,  True,  True,  True,  True,  True,  True,  True,
+          True,  True,  True,  True,  True, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+         False, False, False, False, False, False, False, False, False, False,
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Training Step [32m   0/1500[0m [34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m Loss: 0.0000 LR: 2.00e-04 Time/Step: 0.00s [33m0:00:01[0m ETA: [36m--:--[0m                                                                                                                                                                   │
+[2K[1A[2K[1A[2K         False, False, False, False, False, False]], device='cuda:0'), 'num_frames': 4, 'height': 24, 'width': 24, 'rope_interpolation_scale': [0.33366700033366703, 32.0, 32.0], 'video_coords': None, 'return_dict': False}──────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Training Step [32m   0/1500[0m [34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m Loss: 0.0000 LR: 2.00e-04 Time/Step: 0.00s [33m0:00:01[0m ETA: [36m--:--[0m                                                                                                                                                                   │
+[2K[1A[2K[1A[2K╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Training Step [32m   0/1500[0m [34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m Loss: 0.0000 LR: 2.00e-04 Time/Step: 0.00s [33m0:00:01[0m ETA: [36m--:--[0m                                                                                                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[?25h
+Traceback (most recent call last):
+  File "/home/dongwoo38/ring_fm/scripts/train.py", line 56, in <module>
+    app()
+  File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/typer/main.py", line 336, in __call__
+    raise e
+  File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/typer/main.py", line 319, in __call__
+    return get_command(self)(*args, **kwargs)
+  File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/click/core.py", line 1442, in __call__
+    return self.main(*args, **kwargs)
+  File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/typer/core.py", line 719, in main
+    return _main(
+  File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/typer/core.py", line 189, in _main
+    rv = self.invoke(ctx)
+  File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/click/core.py", line 1226, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+  File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/click/core.py", line 794, in invoke
+    return callback(*args, **kwargs)
+  File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/typer/main.py", line 706, in wrapper
+    return callback(**use_params)
+  File "/home/dongwoo38/ring_fm/scripts/train.py", line 52, in main
+    trainer.train()
+  File "/home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py", line 234, in train
+    loss = self._training_step(batch)
+  File "/home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py", line 403, in _training_step
+    print(f"\n[CHECK] TRAIN SHAPE: {model_inputs.shape}")
+AttributeError: 'dict' object has no attribute 'shape'
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/dongwoo38/ring_fm/scripts/train.py", line 56, in <module>
+[rank0]:     app()
+[rank0]:   File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/typer/main.py", line 336, in __call__
+[rank0]:     raise e
+[rank0]:   File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/typer/main.py", line 319, in __call__
+[rank0]:     return get_command(self)(*args, **kwargs)
+[rank0]:   File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/click/core.py", line 1442, in __call__
+[rank0]:     return self.main(*args, **kwargs)
+[rank0]:   File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/typer/core.py", line 719, in main
+[rank0]:     return _main(
+[rank0]:   File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/typer/core.py", line 189, in _main
+[rank0]:     rv = self.invoke(ctx)
+[rank0]:   File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/click/core.py", line 1226, in invoke
+[rank0]:     return ctx.invoke(self.callback, **ctx.params)
+[rank0]:   File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/click/core.py", line 794, in invoke
+[rank0]:     return callback(*args, **kwargs)
+[rank0]:   File "/home/dongwoo38/miniconda3/envs/ltxv_env/lib/python3.10/site-packages/typer/main.py", line 706, in wrapper
+[rank0]:     return callback(**use_params)
+[rank0]:   File "/home/dongwoo38/ring_fm/scripts/train.py", line 52, in main
+[rank0]:     trainer.train()
+[rank0]:   File "/home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py", line 234, in train
+[rank0]:     loss = self._training_step(batch)
+[rank0]:   File "/home/dongwoo38/ring_fm/src/ltxv_trainer/trainer.py", line 403, in _training_step
+[rank0]:     print(f"\n[CHECK] TRAIN SHAPE: {model_inputs.shape}")
+[rank0]: AttributeError: 'dict' object has no attribute 'shape'
