@@ -74,9 +74,18 @@ class LoraConfig(ConfigBaseModel):
 class ConditioningConfig(ConfigBaseModel):
     """Configuration for conditioning during training"""
 
-    mode: Literal["none", "reference_video"] = Field(
+    # 1. 'ring_fm'을 Literal 목록에 추가합니다.
+    mode: Literal["none", "reference_video", "ring_fm"] = Field(
         default="none",
         description="Type of conditioning to use during training",
+    )
+
+    # 2. ring_fm에서 사용할 t_star 필드를 새로 정의합니다.
+    t_star: float = Field(
+        default=0.8,
+        description="The timestep threshold for Ring/Zipper FM strategy",
+        ge=0.0,
+        le=1.0,
     )
 
     first_frame_conditioning_p: float = Field(
@@ -90,7 +99,6 @@ class ConditioningConfig(ConfigBaseModel):
         default="ref_latents",
         description="Directory name for latents of reference videos when using reference_video mode",
     )
-
 
 class OptimizationConfig(ConfigBaseModel):
     """Configuration for optimization parameters"""

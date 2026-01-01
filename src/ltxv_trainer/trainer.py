@@ -60,6 +60,11 @@ from ltxv_trainer.utils import get_gpu_memory_gb, open_image_as_srgb, convert_ch
 from ltxv_trainer.video_utils import read_video
 
 
+from ltxv_trainer.ring_datasets import create_ring_dataloader
+from ltxv_trainer.ring_training_strategy import get_ring_training_strategy
+from ltxv_trainer.ring_inference import RingZipperSampler
+from ltxv_trainer.ring_zipper_flow import create_flow_matching
+
 # Disable irrelevant warnings from transformers
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
@@ -392,6 +397,9 @@ class LtxvTrainer:
 
         # Use strategy to compute loss
         loss = self._training_strategy.compute_loss(model_pred, training_batch)
+        
+        
+        # 결과 예: [B, F, C, H, W] -> [1, 25, 3, 768, 768]
 
         return loss
 
@@ -552,9 +560,10 @@ class LtxvTrainer:
             self._text_encoder = self._text_encoder.to("cpu")
 
         # Enable gradient checkpointing if requested
-        if self._config.optimization.enable_gradient_checkpointing:
+        if hasattr(self._transformer, "module"):
+            self._transformer.module.enable_gradient_checkpointing()
+        else:
             self._transformer.enable_gradient_checkpointing()
-
     @staticmethod
     def _find_checkpoint(checkpoint_path: str | Path) -> Path | None:
         """Find the checkpoint file to load, handling both file and directory paths."""

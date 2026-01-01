@@ -463,7 +463,7 @@ def main(  # noqa: PLR0913
     """
 
     # Determine device
-    device = device or "cuda" if torch.cuda.is_available() else "cpu"
+    device = device or "cuda:1" if torch.cuda.is_available() else "cpu"
 
     # Parse extensions
     ext_list = [ext.strip() for ext in extensions.split(",")]

@@ -294,6 +294,7 @@ def detect_and_split_scenes(  # noqa: PLR0913
             scene_list=scenes,
             output_dir=output_dir,
             show_progress=True,
+            arg_override='-c copy'
         )
         typer.echo(f"Scenes have been saved to: {output_dir}")
     except Exception as e:

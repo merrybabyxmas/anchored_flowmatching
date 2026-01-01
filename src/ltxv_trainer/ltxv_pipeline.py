@@ -338,7 +338,24 @@ class LTXConditionPipeline(DiffusionPipeline, FromSingleFileMixin, LTXVideoLoraL
         prompt_attention_mask = prompt_attention_mask.repeat(num_videos_per_prompt, 1)
 
         return prompt_embeds, prompt_attention_mask
-
+    def _average_latents_over_time(self, latents, nf, nh, nw):
+            """Packed latents를 프레임별로 평균내어 일관성을 강제합니다."""
+            # 1. Unpack: [B, L, C] -> [B, C, F, H, W]
+            unpacked = self._unpack_latents(
+                latents, nf, nh, nw, 
+                self.transformer_spatial_patch_size, 
+                self.transformer_temporal_patch_size
+            )
+            # 2. Average over temporal dimension (F)
+            # 모든 프레임의 특성을 평균내어 하나의 '기준 이미지' 구조를 만듦
+            avg_latent = unpacked.mean(dim=2, keepdim=True).repeat(1, 1, nf, 1, 1)
+            
+            # 3. Re-pack: [B, C, F, H, W] -> [B, L, C]
+            return self._pack_latents(
+                avg_latent, 
+                self.transformer_spatial_patch_size, 
+                self.transformer_temporal_patch_size
+            )
     # Copied from diffusers.pipelines.mochi.pipeline_mochi.MochiPipeline.encode_prompt
     def encode_prompt(
         self,
@@ -1189,79 +1206,108 @@ class LTXConditionPipeline(DiffusionPipeline, FromSingleFileMixin, LTXVideoLoraL
 
         if self.do_classifier_free_guidance:
             video_coords = torch.cat([video_coords, video_coords], dim=0)
-
         # 5. Prepare timesteps
+        t_star = 0.8  # 하이퍼파라미터 (일관성 강도를 조절)
         latent_num_frames = (num_frames - 1) // self.vae_temporal_compression_ratio + 1
         latent_height = height // self.vae_spatial_compression_ratio
         latent_width = width // self.vae_spatial_compression_ratio
         sigmas = linear_quadratic_schedule(num_inference_steps)
         timesteps = sigmas * 1000
+
         timesteps, num_inference_steps = retrieve_timesteps(
-            self.scheduler,
-            num_inference_steps,
-            device,
-            timesteps=timesteps,
+            self.scheduler, num_inference_steps, device, timesteps=timesteps,
         )
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
-        self._num_timesteps = len(timesteps)
+
+# ... (생략: 5. Prepare timesteps 이전까지는 동일)
+
+        # 5. Prepare timesteps 및 Ring/Zipper 설정
+        t_star = 0.8  # 하이퍼파라미터 (일관성 강도를 조절)
+        
+        sigmas = linear_quadratic_schedule(num_inference_steps)
+        timesteps = sigmas * 1000
+        timesteps, num_inference_steps = retrieve_timesteps(
+            self.scheduler, num_inference_steps, device, timesteps=timesteps,
+        )
 
         # 6. Denoising loop
+        torch.cuda.empty_cache() # 루프 진입 직전 호출
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                if self.interrupt:
-                    continue
+                if self.interrupt: continue
 
                 self._current_timestep = t
+                
+                # --- [추가] Ring/Zipper를 위한 페이즈 구분 ---
+                current_t_normalized = t / 1000.0
+                is_global_phase = current_t_normalized < t_star # t_star는 약 0.8 설정
 
+                # A. Condition Noise 처리 (기존 로직 유지)
                 if image_cond_noise_scale > 0 and init_latents is not None:
-                    # Add timestep-dependent noise to the hard-conditioning latents
-                    # This helps with motion continuity, especially when conditioned on a single frame
                     latents = self.add_noise_to_image_conditioning_latents(
-                        t / 1000.0,
-                        init_latents,
-                        latents,
-                        image_cond_noise_scale,
-                        conditioning_mask,
-                        generator,
+                        current_t_normalized, init_latents, latents, 
+                        image_cond_noise_scale, conditioning_mask, generator,
                     )
 
+                # B. 입력 준비
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
-                if is_conditioning_image_or_video or reference_video is not None:
-                    conditioning_mask_model_input = (
-                        torch.cat([conditioning_mask, conditioning_mask])
-                        if self.do_classifier_free_guidance
-                        else conditioning_mask
-                    )
-                latent_model_input = latent_model_input.to(prompt_embeds.dtype)
+                
+                # C. [핵심] Video Coordinates 조작
+                # Global Phase에서는 시간 좌표를 0으로 고정하여 "정지된 이미지"처럼 인식하게 함
+                if is_global_phase:
+                    current_coords = video_coords.clone()
+                    current_coords[:, 0, :] = 0.0  # 모든 토큰의 t-coordinate를 0으로
+                else:
+                    current_coords = video_coords
 
-                # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-                timestep = t.expand(latent_model_input.shape[0]).unsqueeze(-1).float()
+
+                # D. Transformer 추론
+                timestep_input = t.expand(latent_model_input.shape[0]).unsqueeze(-1).float()
+                # (Conditioning mask 관련 timestep 조절 로직...)
                 if is_conditioning_image_or_video or reference_video is not None:
-                    timestep = torch.min(timestep, (1 - conditioning_mask_model_input) * 1000.0)
+                     conditioning_mask_model_input = (
+                        torch.cat([conditioning_mask, conditioning_mask])
+                        if self.do_classifier_free_guidance else conditioning_mask
+                    )
+                     timestep_input = torch.min(timestep_input, (1 - conditioning_mask_model_input) * 1000.0)
 
                 noise_pred = self.transformer(
-                    hidden_states=latent_model_input,
+                    hidden_states=latent_model_input.to(prompt_embeds.dtype),
                     encoder_hidden_states=prompt_embeds,
-                    timestep=timestep,
+                    timestep=timestep_input,
+                    video_coords=current_coords,  # 변형된 좌표 주입
                     encoder_attention_mask=prompt_attention_mask,
-                    video_coords=video_coords,
-                    attention_kwargs=attention_kwargs,
                     return_dict=False,
                 )[0]
 
+                # E. CFG 적용 및 Step
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
-                    timestep, _ = timestep.chunk(2)
-
+                    timestep_input, _ = timestep_input.chunk(2)
+                
                 denoised_latents = self.scheduler.step(
-                    -noise_pred, t, latents, per_token_timesteps=timestep, return_dict=False
+                    -noise_pred, t, latents, per_token_timesteps=timestep_input, return_dict=False
                 )[0]
+
+                # F. [핵심] Global Phase에서의 Zipper 정렬 (프레임 간 평균화)
+                if is_global_phase:
+                    # LTX-Video의 Packed Latents를 Unpack -> T축 평균 -> 다시 Pack
+                    # 이를 통해 모든 프레임이 완벽하게 동일한 'Anchor'로 수렴하게 함
+                    denoised_latents = self._average_latents_over_time(
+                        denoised_latents, 
+                        latent_num_frames, latent_height, latent_width
+                    )
+
+                # G. 결과 업데이트
                 if is_conditioning_image_or_video or reference_video is not None:
                     tokens_to_denoise_mask = (t / 1000 - 1e-6 < (1.0 - conditioning_mask)).unsqueeze(-1)
                     latents = torch.where(tokens_to_denoise_mask, denoised_latents, latents)
                 else:
                     latents = denoised_latents
+
+                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                    progress_bar.update()
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
