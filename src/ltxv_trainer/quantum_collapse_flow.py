@@ -124,8 +124,8 @@ class QuantumAnchorNetwork(nn.Module):
         frame_means = enhanced_features.mean(dim=1)  # (B, feature_dim) - Identity preservation
         frame_vars = enhanced_features.var(dim=1, unbiased=False)  # (B, feature_dim) - Frame differences
         
-        # Enhanced superposition: Identity + 3x amplified variance for quantum uncertainty
-        quantum_superposition_factor = 3.0  # Strong quantum uncertainty
+        # Enhanced superposition: Identity + 5x amplified variance for quantum uncertainty (Safe Overdrive)
+        quantum_superposition_factor = 5.0  # Increased to 5.0 to compensate for removed index scaling
         quantum_repr = frame_means + quantum_superposition_factor * frame_vars
         
         # Additional high-frequency jitter for quantum decoherence potential
@@ -334,6 +334,8 @@ class QuantumStateCollapseFlowMatching(FlowMatchingBase):
 
         The velocity includes the decoherence operator Ψ(i,t) that creates
         frame-specific collapse directions, preventing averaging collapse.
+
+        CORRECTED: Uses Quotient Rule for normalized weight derivatives.
         """
         F = target.shape[2]
         A_up = anchor.expand(-1, -1, F, -1, -1)
@@ -342,33 +344,60 @@ class QuantumStateCollapseFlowMatching(FlowMatchingBase):
         # Compute quantum weight derivatives
         t_broad = t.view(-1, 1, 1, 1, 1)
 
-        # dα/dt = d(t)/dt = 1 (constant)
-        dalpha_dt = torch.ones_like(t_broad)
-
-        # dβ/dt: Derivative of quantum decoherence function
+        # 1. Calculate raw weights (unnormalized)
+        alpha = t_broad
+        
         beta_width = 0.05
-        beta_t = torch.exp(-((t_broad - self.t_star) ** 2) / (2 * beta_width ** 2))
-        
-        # Include quantum collapse derivative
+        beta_base = torch.exp(-((t_broad - self.t_star) ** 2) / (2 * beta_width ** 2))
         transition_mask = (t_broad < self.t_star).float()
-        decay_factor = torch.exp(-25.0 * (self.t_star - t_broad))
-        decay_derivative = 25.0 * decay_factor
-        
-        dbeta_dt_base = beta_t * (-(t_broad - self.t_star) / (beta_width ** 2))
-        dbeta_dt = dbeta_dt_base * (1.0 - transition_mask) - beta_t * transition_mask * decay_derivative
+        quantum_decay = torch.exp(-25.0 * (self.t_star - t_broad))
+        beta = beta_base * (1.0 - transition_mask + transition_mask * quantum_decay)
 
-        # dγ/dt: Include frame repulsion derivative
-        dgamma_dt_base = -torch.ones_like(t_broad)
-        
-        # Frame repulsion derivative
+        gamma_base = 1.0 - t_broad
         repulsion_mask = (t_broad < self.t_star).float()
-        repulsion_derivative = 5.0 / self.t_star * repulsion_mask
-        dgamma_dt = dgamma_dt_base * (1.0 + repulsion_derivative)
+        repulsion_strength = 5.0 * (self.t_star - t_broad) / self.t_star
+        repulsion_strength = torch.clamp(repulsion_strength, 0.0, 5.0)
+        frame_repulsion_factor = 1.0 + repulsion_mask * repulsion_strength
+        gamma = gamma_base * frame_repulsion_factor
+
+        # 2. Calculate derivatives of raw weights
+        # dα/dt = 1
+        d_alpha = torch.ones_like(t_broad)
+
+        # dβ/dt
+        decay_derivative = 25.0 * quantum_decay
+        d_beta_base = beta_base * (-(t_broad - self.t_star) / (beta_width ** 2))
+        d_beta = d_beta_base * (1.0 - transition_mask) + beta_base * transition_mask * decay_derivative
+        # Note: The original code had a minus sign for the second term, but with chain rule on exp(-25(t_star-t)):
+        # d/dt [-25(t_star - t)] = 25. So it multiplies by 25.
+        # However, the previous code had logic that seemed to try to stitch them.
+        # Let's trust the logic derived from the function:
+        # if t < t_star: beta = beta_base * decay. d(beta)/dt = d(base)/dt * decay + base * d(decay)/dt
+        # d(decay)/dt = decay * 25.
+        
+        # dγ/dt
+        d_gamma_base = -torch.ones_like(t_broad)
+        # repulsion_strength = 5 - 5t/t_star. d/dt = -5/t_star
+        d_repulsion = -5.0 / self.t_star * repulsion_mask
+        # gamma = gamma_base * (1 + repulsion)
+        # d_gamma = d_gamma_base * (1+rep) + gamma_base * d_rep
+        d_gamma = d_gamma_base * frame_repulsion_factor + gamma_base * d_repulsion
+
+        # 3. Calculate Sigma and dSigma
+        sigma = alpha + beta + gamma
+        d_sigma = d_alpha + d_beta + d_gamma
+
+        # 4. Apply Quotient Rule: d(w/sigma)/dt = (dw*sigma - w*dsigma) / sigma^2
+        sigma_sq = sigma.pow(2) + 1e-8 # Stability epsilon
+        
+        d_alpha_norm = (d_alpha * sigma - alpha * d_sigma) / sigma_sq
+        d_beta_norm = (d_beta * sigma - beta * d_sigma) / sigma_sq
+        d_gamma_norm = (d_gamma * sigma - gamma * d_sigma) / sigma_sq
 
         # Quantum velocity components
-        u_noise = dalpha_dt * eps_up
-        u_anchor = dbeta_dt * A_up
-        u_data = dgamma_dt * target
+        u_noise = d_alpha_norm * eps_up
+        u_anchor = d_beta_norm * A_up
+        u_data = d_gamma_norm * target
 
         # Total quantum collapse velocity
         u_t = u_noise + u_anchor + u_data
