@@ -22,7 +22,6 @@ tmp
 *.safetensors.index.json
 *.safetensors.index.json.lock
 *.webp
-configs/*.yaml
 !configs/ltxv_2b_full.yaml
 !configs/ltxv_2b_lora.yaml
 !configs/ltxv_2b_lora_low_vram.yaml

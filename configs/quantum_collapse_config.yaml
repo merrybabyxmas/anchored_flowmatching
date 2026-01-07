@@ -1,0 +1,126 @@
+# Quantum State Collapse Flow Matching Configuration
+# Solves Averaging Collapse Problem in Video Generation
+
+# Model Configuration
+model:
+  id: "Lightricks/LTX-Video"
+  variant: "2b"  # or "13b" for larger model
+  cache_dir: null
+  
+# Quantum Flow Matching Settings
+flow_matching:
+  method: "quantum_fm"  # NEW: Quantum State Collapse (replaces ring_fm)
+  t_star: 0.2            # Quantum decoherence threshold (critical parameter)
+  use_anchor_net: true   # Enable learnable quantum anchor network
+  
+# Training Strategy
+training:
+  strategy: "quantum_fm"              # Use quantum training strategy
+  temporal_embedding_amplification: 5.0  # 5x temporal signal boost
+  orthogonality_loss_weight: 0.1      # Frame uniqueness enforcement
+  quantum_metrics_log_interval: 50    # Log quantum metrics every N steps
+  
+# Quantum-specific Hyperparameters
+quantum:
+  # Quantum Anchor Settings
+  quantum_superposition_factor: 3.0   # Variance amplification for superposition
+  high_freq_jitter: 0.1              # High-frequency noise for decoherence
+  anchor_entropy_range: [-8, 8]       # Wider variance range for quantum states
+  
+  # State Collapse Mechanism
+  collapse_threshold: 0.2             # t_star: where quantum collapse begins
+  frame_repulsion_strength: 5.0       # Anti-averaging force multiplier
+  quantum_decay_rate: 25.0            # Exponential decay for anchor suppression
+  
+  # Orthogonality Enforcement
+  cosine_similarity_penalty: true     # Penalize similar frame predictions
+  orthogonal_projection: false        # Optional: project frames to orthogonal space
+
+# Training Configuration
+training_config:
+  learning_rate: 1e-4
+  batch_size: 1
+  max_steps: 100000
+  
+  # Enhanced for Quantum Training
+  gradient_clip_norm: 1.0             # Prevent quantum instability
+  mixed_precision: "bf16"
+  gradient_accumulation_steps: 4
+  
+  # Validation Settings
+  validation_steps: 1500
+  num_validation_videos: 4
+  validation_guidance_scale: 3.0
+
+# Data Configuration
+data:
+  dataset_path: "path/to/your/video/dataset"
+  resolution: [256, 256]              # Spatial resolution
+  num_frames: 16                      # Temporal length
+  frame_stride: 1
+  
+  # Quantum-optimized preprocessing
+  normalize_frames: true              # Essential for quantum coherence
+  temporal_consistency_check: true    # Verify frame sequence integrity
+
+# Optimizer Configuration  
+optimizer:
+  name: "adamw"
+  betas: [0.9, 0.95]                  # Optimized for quantum training
+  weight_decay: 1e-2
+  eps: 1e-8
+
+# Learning Rate Schedule
+lr_scheduler:
+  type: "cosine_annealing"
+  warmup_steps: 1000                  # Gradual quantum state initialization
+  min_lr: 1e-6
+
+# LoRA Configuration (for efficient quantum fine-tuning)
+lora:
+  enabled: true
+  rank: 128                           # Higher rank for quantum complexity
+  alpha: 256
+  dropout: 0.1
+  target_modules:
+    - "to_q"
+    - "to_k" 
+    - "to_v"
+    - "to_out.0"
+    - "temporal_attn.to_q"            # Include temporal attention for quantum effect
+    - "temporal_attn.to_k"
+    - "temporal_attn.to_v"
+
+# Output Configuration
+output:
+  save_dir: "outputs/quantum_collapse_v1"
+  checkpoint_steps: 5000
+  save_full_model: false              # Save LoRA weights only
+  
+  # Quantum-specific outputs
+  save_quantum_metrics: true          # Save quantum diagnostic data
+  export_quantum_analysis: true       # Generate quantum state analysis plots
+
+# Logging Configuration
+logging:
+  use_wandb: true
+  project_name: "quantum-video-generation"
+  run_name: "quantum_collapse_experiment"
+  
+  # Enhanced quantum logging
+  log_quantum_metrics: true
+  log_frame_divergence: true
+  log_state_collapse_energy: true
+  log_orthogonality_scores: true
+  
+  # Log intervals
+  loss_log_steps: 10
+  metric_log_steps: 50
+  sample_log_steps: 1500
+
+# Quantum Debugging (for development)
+debug:
+  enabled: false
+  save_intermediate_states: false     # Save quantum states during training
+  visualize_state_collapse: false     # Generate collapse visualization
+  track_frame_similarity: true       # Monitor averaging collapse prevention

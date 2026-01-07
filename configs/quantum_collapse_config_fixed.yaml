@@ -1,0 +1,93 @@
+# Quantum State Collapse Flow Matching Configuration
+# Fixed to match LtxvTrainerConfig schema
+
+# Model configuration
+model:
+  model_source: "LTXV_2B_0.9.6_DEV"
+  training_mode: "lora"
+  load_checkpoint: null
+
+# LoRA configuration
+lora:
+  rank: 128
+  alpha: 256
+  dropout: 0.1
+  target_modules:
+    - "to_k"
+    - "to_q"
+    - "to_v"
+    - "to_out.0"
+
+# Conditioning configuration - Ring FM (quantum enhancements applied in training strategy)
+conditioning:
+  mode: "ring_fm"
+  first_frame_conditioning_p: 0.1
+  t_star: 0.2  # Quantum decoherence threshold
+
+# AFM training configuration
+afm_training:
+  use_phase_separation: false
+
+# Flow Matching configuration
+flow_matching:
+  timestep_sampling_mode: "uniform"
+  timestep_sampling_params: {}
+
+# Optimization configuration
+optimization:
+  learning_rate: 1e-5
+  steps: 100000
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  max_grad_norm: 1.0
+  optimizer_type: "adamw"
+  scheduler_type: "cosine"
+  scheduler_params: {}
+  enable_gradient_checkpointing: true
+
+# Acceleration configuration
+acceleration:
+  mixed_precision_mode: "bf16"
+  quantization: null
+  load_text_encoder_in_8bit: false
+  compile_with_inductor: false
+  compilation_mode: "reduce-overhead"
+
+# Data configuration
+data:
+  preprocessed_data_root: "/home/dongwoo38/openvid_data"
+  num_dataloader_workers: 2
+
+# Validation configuration
+validation:
+  skip_initial_validation: false
+  prompts:
+    - "The video features a man in a suit and tie, sitting in an office setting. The man is speaking, and his expression is serious. The office has a window with blinds, and the lighting is soft and natural. The man's suit is dark, and his tie is patterned. The office appears to be well-lit, with a warm tone to the lighting. The man's posture is upright, and he is looking directly at the camera. The overall style of the video is professional and formal."
+  video_dims: [512, 512, 25]
+  interval: 1500
+  inference_steps: 50
+  guidance_scale: 3.5
+  videos_per_prompt: 1
+  seed: 42
+
+# Checkpoints configuration
+checkpoints:
+  interval: 5000
+  keep_last_n: 1
+
+# Hub configuration
+hub:
+  push_to_hub: false
+  hub_model_id: null
+
+# Wandb configuration
+wandb:
+  enabled: true
+  project: "quantum-video-generation"
+  entity: null
+  tags: ["quantum-collapse", "ring-fm"]
+  log_validation_videos: true
+
+# General configuration
+output_dir: "outputs/quantum_collapse_v1"
+seed: 42
