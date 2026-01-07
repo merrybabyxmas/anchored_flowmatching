@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import PIL.Image
 import torch
+import wandb
 from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
 from diffusers.image_processor import PipelineImageInput
 from diffusers.loaders import FromSingleFileMixin, LTXVideoLoraLoaderMixin
@@ -339,20 +340,32 @@ class LTXConditionPipeline(DiffusionPipeline, FromSingleFileMixin, LTXVideoLoraL
 
         return prompt_embeds, prompt_attention_mask
     def _average_latents_over_time(self, latents, nf, nh, nw):
-            """Packed latents를 프레임별로 평균내어 일관성을 강제합니다."""
+            """
+            Packed latents를 프레임별로 평균내어 일관성을 강제합니다.
+            Task 1: Weighted Identity Anchor
+            Formula: A = 0.7 * z_first + 0.3 * mean(z_all)
+            """
             # 1. Unpack: [B, L, C] -> [B, C, F, H, W]
             unpacked = self._unpack_latents(
                 latents, nf, nh, nw, 
                 self.transformer_spatial_patch_size, 
                 self.transformer_temporal_patch_size
             )
-            # 2. Average over temporal dimension (F)
-            # 모든 프레임의 특성을 평균내어 하나의 '기준 이미지' 구조를 만듦
-            avg_latent = unpacked.mean(dim=2, keepdim=True).repeat(1, 1, nf, 1, 1)
+            
+            # 2. Compute Weighted Anchor
+            # z_first corresponds to the first frame (index 0)
+            z_first = unpacked[:, :, 0:1, :, :]
+            z_mean = unpacked.mean(dim=2, keepdim=True)
+            
+            # Weighted Anchor Formula
+            weighted_anchor = 0.7 * z_first + 0.3 * z_mean
+            
+            # Broadcast to all frames to enforce identity anchoring
+            anchored_latents = weighted_anchor.repeat(1, 1, nf, 1, 1)
             
             # 3. Re-pack: [B, C, F, H, W] -> [B, L, C]
             return self._pack_latents(
-                avg_latent, 
+                anchored_latents, 
                 self.transformer_spatial_patch_size, 
                 self.transformer_temporal_patch_size
             )
@@ -816,6 +829,49 @@ class LTXConditionPipeline(DiffusionPipeline, FromSingleFileMixin, LTXVideoLoraL
     @property
     def interrupt(self):
         return self._interrupt
+    def _save_intermediate_video(self, latents, step, suffix, F, H, W):
+            """중간 생성 결과(Global ODE 종료 시점)를 MP4로 저장하는 함수"""
+            import os
+            import torch
+            from diffusers.utils import export_to_video
+            
+            # 1. 후처리: Unpack -> Denormalize
+            video_latents = self._unpack_latents(
+                latents, F, H, W, 
+                self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+            )
+            video_latents = self._denormalize_latents(
+                video_latents, self.vae.latents_mean, self.vae.latents_std, self.vae.config.scaling_factor
+            )
+            
+            # 2. VAE Decode
+            with torch.no_grad():
+                # 타임스텝 텐서 생성 (0.0 사용)
+                decode_t = torch.tensor([0.0], device=latents.device, dtype=self.vae.dtype)
+                
+                # [수정] 키워드 인자(timestep=...) 대신 위치 인자로 전달하거나, 
+                # 라이브러리 사양에 맞춰 시도합니다.
+                try:
+                    # 일반적인 시그니처: decode(z, timestep, return_dict=...)
+                    video = self.vae.decode(
+                        video_latents.to(self.vae.dtype), 
+                        decode_t, 
+                        return_dict=False
+                    )[0]
+                except TypeError:
+                    # 만약 위 방법도 실패하면 timestep 없이 시도 (일부 버전 대응)
+                    video = self.vae.decode(
+                        video_latents.to(self.vae.dtype), 
+                        return_dict=False
+                    )[0]
+                
+                video = self.video_processor.postprocess_video(video, output_type="np")[0]
+            
+            # 3. 저장
+            os.makedirs("outputs/intermediates", exist_ok=True)
+            save_path = f"outputs/intermediates/global_anchor_step_{step}_{suffix}.mp4"
+            export_to_video(video, save_path, fps=24)
+            print(f"\n>>> Saved intermediate video to: {save_path}")
 
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
@@ -1232,50 +1288,87 @@ class LTXConditionPipeline(DiffusionPipeline, FromSingleFileMixin, LTXVideoLoraL
 
         # 6. Denoising loop
         torch.cuda.empty_cache() # 루프 진입 직전 호출
+# ----------------------------------------------------------------------
+        # 6. Denoising loop (Single Frame ODE Strategy)
+        # ----------------------------------------------------------------------
+        t_boundary = 0.2 
+        tokens_per_frame = latent_height * latent_width // (self.transformer_spatial_patch_size ** 2)
+        
+        # Global Phase용 초기 설정
+        # Global Phase에서는 1프레임 분량의 latent만 transformer에 전달합니다.
+        # latents: [B, F*H*W, C] -> Global일 때는 [B, 1*H*W, C]만 사용
+        
+        torch.cuda.empty_cache()
+
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt: continue
 
                 self._current_timestep = t
-                
-                # --- [추가] Ring/Zipper를 위한 페이즈 구분 ---
                 current_t_normalized = t / 1000.0
-                is_global_phase = current_t_normalized < t_star # t_star는 약 0.8 설정
+                is_global_phase = current_t_normalized > t_boundary
 
-                # A. Condition Noise 처리 (기존 로직 유지)
-                if image_cond_noise_scale > 0 and init_latents is not None:
-                    latents = self.add_noise_to_image_conditioning_latents(
-                        current_t_normalized, init_latents, latents, 
-                        image_cond_noise_scale, conditioning_mask, generator,
-                    )
+                # 차기 타임스텝 확인 (Phase 전환 감지용)
+                next_t_norm = timesteps[i+1] / 1000.0 if i < len(timesteps) - 1 else 0.0
 
-                # B. 입력 준비
-                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
-                
-                # C. [핵심] Video Coordinates 조작
-                # Global Phase에서는 시간 좌표를 0으로 고정하여 "정지된 이미지"처럼 인식하게 함
+                # A. [최적화] 입력 데이터 슬라이싱 (Global: 1프레임 vs Local: 전체)
                 if is_global_phase:
-                    current_coords = video_coords.clone()
-                    current_coords[:, 0, :] = 0.0  # 모든 토큰의 t-coordinate를 0으로
+                    # 모든 프레임이 동일해야 하므로 첫 번째 프레임 데이터만 추출
+                    # latents shape: [B, F*H*W, C]
+                    step_latents = latents[:, :tokens_per_frame, :]
+                    
+                    # 좌표계 설정 (Global: 시간축 0으로 고정)
+                    # video_coords shape: [B, 3, S]
+                    step_coords = video_coords[:, :, :tokens_per_frame].clone()
+                    step_coords[:, 0, :] = 0.0  # 모든 토큰의 시간 인덱스를 0으로 고정
                 else:
-                    current_coords = video_coords
+                    # Local Phase: 전체 프레임 사용
+                    step_latents = latents
+                    
+                    # 좌표계 설정 (Local: Linear Alpha Decoupling 적용)
+                    step_coords = video_coords.clone()
+                    # Linear Alpha 스케줄: alpha = clamp(1.0 - (t / t_boundary), 0.0, 1.0)
+                    # t=0.0 → alpha=1.0, t=0.2 → alpha=0.0 (즉각적인 시간 좌표 분리)
+                    alpha = torch.clamp(1.0 - (current_t_normalized / t_boundary), 0.0, 1.0)
+                    step_coords[:, 0, :] = alpha * step_coords[:, 0, :]
 
+                # B. CFG를 위한 배치 확장 (2x)
+                latent_model_input = torch.cat([step_latents] * 2) if self.do_classifier_free_guidance else step_latents
+                
+                # 좌표계 배치 맞춤
+                if step_coords.shape[0] != latent_model_input.shape[0]:
+                    step_coords = torch.cat([step_coords] * 2, dim=0) if self.do_classifier_free_guidance else step_coords
+
+                # C. [디버그] 중간 저장 로직
+                if i < len(timesteps) - 1:
+                    # t=0.8 (Early Global)
+                    if current_t_normalized > 0.8 and next_t_norm <= 0.8:
+                        print(f"\n[DEBUG] Early Identity (t={current_t_normalized:.2f})")
+                        self._save_intermediate_video(latents, i, "t08_early", latent_num_frames, latent_height, latent_width)
+                    
+                    # t=0.2 (Global ODE 종료 시점)
+                    if current_t_normalized > t_boundary and next_t_norm <= t_boundary:
+                        print(f"\n[DEBUG] Global ODE Finished (t={current_t_normalized:.2f}). Junction Point reached.")
+                        # 저장 시점에는 현재의 1프레임 결과를 확장하여 저장해봅니다.
+                        temp_latents = step_latents.repeat(1, latent_num_frames, 1)
+                        self._save_intermediate_video(temp_latents, i, "t02_global_anchor", latent_num_frames, latent_height, latent_width)
 
                 # D. Transformer 추론
                 timestep_input = t.expand(latent_model_input.shape[0]).unsqueeze(-1).float()
-                # (Conditioning mask 관련 timestep 조절 로직...)
+                
+                # Reference Video 및 Mask 컨디셔닝 (필요 시)
                 if is_conditioning_image_or_video or reference_video is not None:
-                     conditioning_mask_model_input = (
-                        torch.cat([conditioning_mask, conditioning_mask])
-                        if self.do_classifier_free_guidance else conditioning_mask
-                    )
-                     timestep_input = torch.min(timestep_input, (1 - conditioning_mask_model_input) * 1000.0)
+                    c_mask = torch.cat([conditioning_mask] * 2) if self.do_classifier_free_guidance else conditioning_mask
+                    # Global일 경우 마스크도 슬라이싱
+                    if is_global_phase:
+                        c_mask = c_mask[:, :tokens_per_frame]
+                    timestep_input = torch.min(timestep_input, (1 - c_mask) * 1000.0)
 
                 noise_pred = self.transformer(
                     hidden_states=latent_model_input.to(prompt_embeds.dtype),
                     encoder_hidden_states=prompt_embeds,
                     timestep=timestep_input,
-                    video_coords=current_coords,  # 변형된 좌표 주입
+                    video_coords=step_coords, 
                     encoder_attention_mask=prompt_attention_mask,
                     return_dict=False,
                 )[0]
@@ -1286,45 +1379,36 @@ class LTXConditionPipeline(DiffusionPipeline, FromSingleFileMixin, LTXVideoLoraL
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
                     timestep_input, _ = timestep_input.chunk(2)
                 
-                denoised_latents = self.scheduler.step(
-                    -noise_pred, t, latents, per_token_timesteps=timestep_input, return_dict=False
+                # 스케줄러 업데이트 (step_latents에 대해 수행)
+                denoised_step_result = self.scheduler.step(
+                    -noise_pred, t, step_latents, per_token_timesteps=timestep_input, return_dict=False
                 )[0]
 
-                # F. [핵심] Global Phase에서의 Zipper 정렬 (프레임 간 평균화)
+                # F. [핵심] Phase 전환 및 Latent 업데이트 로직
                 if is_global_phase:
-                    # LTX-Video의 Packed Latents를 Unpack -> T축 평균 -> 다시 Pack
-                    # 이를 통해 모든 프레임이 완벽하게 동일한 'Anchor'로 수렴하게 함
-                    denoised_latents = self._average_latents_over_time(
-                        denoised_latents, 
-                        latent_num_frames, latent_height, latent_width
-                    )
-
-                # G. 결과 업데이트
-                if is_conditioning_image_or_video or reference_video is not None:
-                    tokens_to_denoise_mask = (t / 1000 - 1e-6 < (1.0 - conditioning_mask)).unsqueeze(-1)
-                    latents = torch.where(tokens_to_denoise_mask, denoised_latents, latents)
+                    if next_t_norm <= t_boundary:
+                        # [Junction Point] Global의 마지막 1프레임 결과를 모든 프레임으로 복사하여 확장
+                        print(f"[TRANSITION] Repeating single frame anchor to all {latent_num_frames} frames.")
+                        latents = denoised_step_result.repeat(1, latent_num_frames, 1)
+                    else:
+                        # 여전히 Global Phase인 경우: 1프레임 영역만 업데이트 (나머지는 무시하거나 노이즈 유지)
+                        latents[:, :tokens_per_frame, :] = denoised_step_result
                 else:
-                    latents = denoised_latents
+                    # Local Phase: 전체 프레임 업데이트
+                    latents = denoised_step_result
 
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                    progress_bar.update()
+                # G. 메모리 정리 및 진행바 업데이트
+                if abs(current_t_normalized - t_boundary) < 0.02:
+                    torch.cuda.empty_cache()
 
-                if callback_on_step_end is not None:
-                    callback_kwargs = {}
-                    for k in callback_on_step_end_tensor_inputs:
-                        callback_kwargs[k] = locals()[k]
-                    callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
-
-                    latents = callback_outputs.pop("latents", latents)
-                    prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
-
-                # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
 
                 if XLA_AVAILABLE:
                     xm.mark_step()
 
+       
+       
         # Handle reference video output processing
         if reference_video is not None and output_reference_comparison:
             # Split latents: [reference_latents, frame_conditions, target_latents]

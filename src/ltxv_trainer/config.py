@@ -345,7 +345,7 @@ class WandbConfig(ConfigBaseModel):
 class FlowMatchingConfig(ConfigBaseModel):
     """Configuration for flow matching training"""
 
-    timestep_sampling_mode: Literal["uniform", "shifted_logit_normal"] = Field(
+    timestep_sampling_mode: Literal["uniform", "shifted_logit_normal", "motion_centric", "afm_phase", "afm_hybrid", "afm_hybrid_identity"] = Field(
         default="shifted_logit_normal",
         description="Mode to use for timestep sampling",
     )
@@ -353,6 +353,43 @@ class FlowMatchingConfig(ConfigBaseModel):
     timestep_sampling_params: dict = Field(
         default_factory=dict,
         description="Parameters for timestep sampling",
+    )
+
+
+class AFMTrainingConfig(ConfigBaseModel):
+    """AFM Phase Separation Training Configuration"""
+    
+    use_phase_separation: bool = Field(
+        default=False,
+        description="Enable AFM Phase Separation training"
+    )
+    
+    auto_transition_step: int = Field(
+        default=10000,
+        description="Automatic transition step from Stage 1 to Stage 2"
+    )
+    
+    stage1_config: dict = Field(
+        default_factory=lambda: {
+            "description": "Identity Formation",
+            "timestep_range": [0.2, 1.0],
+            "motion_gain": 1.0,
+            "loss_weights": {"local": 0.0, "global": 1.0}
+        },
+        description="Stage 1 (Global Identity) configuration"
+    )
+    
+    stage2_config: dict = Field(
+        default_factory=lambda: {
+            "description": "Motion Refinement", 
+            "timestep_range": [0.0, 0.2],
+            "motion_gain": 2.0,
+            "loss_weights": {"local": 10.0, "global": 0.0},
+            "learning_rate_scale": 0.2,  # Stage 2에서 LR을 1/5로 감소
+            "enable_snr_rescaling": True,  # SNR Rescaling 활성화
+            "motion_gain_warmup_steps": 2000  # Motion Gain Warm-up 스텝 수
+        },
+        description="Stage 2 (Local Motion) configuration"
     )
 
 
@@ -371,6 +408,7 @@ class LtxvTrainerConfig(ConfigBaseModel):
     hub: HubConfig = Field(default_factory=HubConfig)
     flow_matching: FlowMatchingConfig = Field(default_factory=FlowMatchingConfig)
     wandb: WandbConfig = Field(default_factory=WandbConfig)
+    afm_training: AFMTrainingConfig = Field(default_factory=AFMTrainingConfig)
 
     # General configuration
     seed: int = Field(

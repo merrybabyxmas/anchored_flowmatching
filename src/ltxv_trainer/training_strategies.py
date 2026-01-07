@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 import torch
+import wandb
 from pydantic import BaseModel, computed_field
 from torch import Tensor
 
@@ -187,94 +188,308 @@ class TrainingStrategy(ABC):
 
 class RingZipperTrainingStrategy(TrainingStrategy):
     """
-    사용자의 Ring/Zipper 알고리즘을 LTX-Video 트레이너에 통합한 핵심 전략.
+    Identity-Anchored 2-Stage Flow Matching 전략.
+    1단계(Global): Identity 수렴 학습 (t < 0.8)
+    2단계(Local): Residual 디테일 학습 (t >= 0.8, 2배 가중치)
     """
     def __init__(self, conditioning_config: ConditioningConfig, t_star: float = 0.8):
         super().__init__(conditioning_config)
         self.t_star = t_star
-        # Ring FM 엔진 초기화 (내부에 AnchorNetwork 포함)
         self.flow_matching = create_flow_matching(
             method="ring_fm",
             t_star=t_star,
-            latent_dim=128 # LTX-Video 기본 latent dim, prepare_batch에서 동적 확인
+            latent_dim=128
         )
+        self.accelerator = None  # Will be set by trainer
+        self.global_step = 0  # Will be updated by trainer
 
     def get_data_sources(self) -> list[str]:
         return ["latents", "conditions"]
 
     def prepare_batch(self, batch: dict[str, Any], timestep_sampler: TimestepSampler) -> TrainingBatch:
-        # 1. 원본 데이터 추출 (B, Seq, C)
+        # 1. 데이터 추출 및 Video Shape 변환 (B, C, F, H, W)
         latents_info = batch["latents"]
         x0_seq = latents_info["latents"] 
         B, S, C = x0_seq.shape
+        F, H, W = latents_info["num_frames"][0].item(), latents_info["height"][0].item(), latents_info["width"][0].item()
         
-        F = latents_info["num_frames"][0].item()
-        H = latents_info["height"][0].item()
-        W = latents_info["width"][0].item()
-        fps = latents_info.get("fps", [DEFAULT_FPS])[0].item()
-
-        # 2. Ring FM 연산을 위해 Video Shape로 변환 (B, C, F, H, W)
-        # LTX-Video는 (B, S, C) 형태이므로 텐서 재배열이 필요함
         x0 = x0_seq.view(B, F, H, W, C).permute(0, 4, 1, 2, 3).contiguous()
         device = x0.device
 
-        # 3. Ring/Zipper 핵심 파라미터 생성
-        t = timestep_sampler.sample_for(x0_seq).to(device) # (B,)
+        # 2. 타임스텝 샘플링 (B,) with Motion-Centric Importance Sampling
+        t = timestep_sampler.sample_for(x0_seq).to(device)
         
-        # [원칙 2, 3] Shared Noise 생성 ε ∈ R[B, C, 1, H, W]
+        # MCIS Importance Weight 계산 (샘플링 편향 보정)
+        if hasattr(timestep_sampler, 'get_importance_weight'):
+            importance_weights = timestep_sampler.get_importance_weight(t)
+        else:
+            importance_weights = torch.ones_like(t)  # Uniform sampling - no bias correction needed
+
+        # [디버깅] Timestep 분포 및 경계값 정밀 로깅
+        t_mean_precise = t.mean().item()
+        # std() 계산 시 batch_size=1일 때 경고 방지
+        t_std_precise = t.std().item() if t.numel() > 1 else 0.0
+        t_scaled = (t * 1000.0).cpu()  # 0~1000 스케일
+        t_scaled_mean = t_scaled.mean().item()
+        t_scaled_std = t_scaled.std().item() if t_scaled.numel() > 1 else 0.0
+
+        # t_boundary (0.2) 근처 샘플 탐지
+        t_boundary = self.t_star  # 0.2
+        boundary_tolerance = 0.01  # ±0.01 범위
+        near_boundary_mask = (t >= t_boundary - boundary_tolerance) & (t <= t_boundary + boundary_tolerance)
+        near_boundary_samples = t[near_boundary_mask]
+
+        # WandB 로깅 (정밀 timestep 분포, step 자동 관리)
+        timestep_log = {
+            "timestep/t_mean": t_mean_precise,
+            "timestep/t_std": t_std_precise,
+            "timestep/t_scaled_mean": t_scaled_mean,
+            "timestep/t_scaled_std": t_scaled_std,
+            "timestep/near_boundary_count": near_boundary_mask.sum().item(),
+        }
+        if wandb.run is not None:
+            wandb.log(timestep_log)
+
+        # 터미널 로깅 (매 50스텝마다 + 경계값 근처 샘플 발견 시)
+        if self.global_step % 50 == 0 or near_boundary_mask.any():
+            boundary_info = ""
+            if near_boundary_mask.any():
+                boundary_samples_str = ", ".join([f"{s.item():.8f}" for s in near_boundary_samples[:3]])
+                boundary_info = f"\n  [BOUNDARY DETECTED] t near {t_boundary}: [{boundary_samples_str}], Scaled: {(near_boundary_samples[0] * 1000).item():.2f}"
+
+            logger.info(
+                f"[TRAIN DEBUG] Step {self.global_step} - Timestep Distribution:\n"
+                f"  t (0-1 scale): mean={t_mean_precise:.8f}, std={t_std_precise:.8f}\n"
+                f"  t (0-1000 scale): mean={t_scaled_mean:.6f}, std={t_scaled_std:.6f}\n"
+                f"  Global/Local Boundary t: {t_boundary:.8f} (Scaled: {t_boundary * 1000:.2f})"
+                f"{boundary_info}"
+            )
+
+        # 3. [RAB] Sparse Anchor 생성 (blur + noise sparsification)
+        # compute_anchor 내부에서 Gaussian blur와 sparse noise 추가
+        anchor, anchor_mu, anchor_log_sigma2 = self.flow_matching.compute_anchor(x0)
+
+        # 4. Noise 및 RAB Path 연산
         noise = self.flow_matching.sample_noise(x0.shape).to(device)
-        
-        # [원칙 5] Anchor 계산 (Stochastic Anchor A)
-        anchor, mu, log_sigma2 = self.flow_matching.compute_anchor(x0)
-        
-        # [원칙 6, 7] Piecewise Path 및 Teacher Velocity 계산
+
+        # [RAB] Unified Bridge Path: x_t = α_t·noise + β_t·anchor + γ_t·data
         z_t_vid = self.flow_matching.compute_forward_path(noise, x0, t, anchor=anchor)
+
+        # [RAB] Residual Velocity: u_t = dα/dt·noise + dβ/dt·anchor + dγ/dt·data
         u_t_vid = self.flow_matching.compute_teacher_velocity(noise, x0, t, anchor=anchor)
-        
-        # 4. 모델 입력을 위해 다시 Sequence 형태로 복구 (B, S, C)
+
+        # 5. Sequence 형태로 복구
         z_t_seq = z_t_vid.permute(0, 2, 3, 4, 1).reshape(B, S, C)
         u_t_seq = u_t_vid.permute(0, 2, 3, 4, 1).reshape(B, S, C)
 
-        # 5. 기타 컨디셔닝 준비 (기존 로직 유지)
+        # [RAB] Conservative velocity clamp for VAE latent manifold
+        # VAE latents have std ≈ 0.18, so velocity should be in similar range
+        u_t_seq = torch.clamp(u_t_seq, min=-1.5, max=1.5)
+
+        # ===========================
+        # 📊 RAB 진단 로깅
+        # ===========================
+
+        # RAB 메트릭 가져오기
+        rab_metrics = self.flow_matching.get_rab_metrics()
+
+        # 표준편차 계산
+        x0_std = x0.std().item()
+        anchor_std = anchor.std().item()
+        z_t_vid_std = z_t_vid.std().item()
+        noise_std = noise.std().item()
+
+        # Target norm 계산
+        u_t_flat = u_t_vid.reshape(B, -1)
+        target_norm = torch.linalg.vector_norm(u_t_flat, ord=2, dim=1).mean().item()
+
+        # NaN/Inf 체크
+        anchor_has_nan = torch.isnan(anchor).any().item()
+        anchor_has_inf = torch.isinf(anchor).any().item()
+        u_t_has_nan = torch.isnan(u_t_vid).any().item()
+        u_t_has_inf = torch.isinf(u_t_vid).any().item()
+
+        # 로그 메트릭 수집
+        log_dict = {
+            "data/x0_std": x0_std,
+            "data/anchor_std": anchor_std,
+            "data/z_t_std": z_t_vid_std,
+            "data/noise_std": noise_std,
+            "data/target_norm": target_norm,
+            "data/anchor_has_nan": float(anchor_has_nan),
+            "data/anchor_has_inf": float(anchor_has_inf),
+            "data/u_t_has_nan": float(u_t_has_nan),
+            "data/u_t_has_inf": float(u_t_has_inf),
+            # RAB-specific metrics
+            "rab/residual_norm": rab_metrics.get('residual_norm', 0.0),
+            "rab/alpha_t": rab_metrics.get('alpha_t', 0.0),
+            "rab/beta_t": rab_metrics.get('beta_t', 0.0),
+            "rab/gamma_t": rab_metrics.get('gamma_t', 0.0),
+            "rab/u_noise_contrib": rab_metrics.get('u_noise_contrib', 0.0),
+            "rab/u_anchor_contrib": rab_metrics.get('u_anchor_contrib', 0.0),
+            "rab/u_data_contrib": rab_metrics.get('u_data_contrib', 0.0),
+        }
+
+        # WandB 로깅 (wandb.log 직접 사용, step 자동 관리)
+        if wandb.run is not None:
+            wandb.log(log_dict)
+
+        # 터미널 로깅 (매 50스텝마다)
+        if self.global_step % 50 == 0:
+            logger.info(
+                f"[Step {self.global_step}] RAB Data Stats - "
+                f"x0_std: {x0_std:.4f}, anchor_std: {anchor_std:.4f}, "
+                f"z_t_std: {z_t_vid_std:.4f}, noise_std: {noise_std:.4f}, "
+                f"target_norm: {target_norm:.4f}, "
+                f"residual_norm: {rab_metrics.get('residual_norm', 0.0):.4f}"
+            )
+            logger.info(
+                f"[Step {self.global_step}] RAB Bridge Weights - "
+                f"α_t: {rab_metrics.get('alpha_t', 0.0):.4f}, "
+                f"β_t: {rab_metrics.get('beta_t', 0.0):.4f}, "
+                f"γ_t: {rab_metrics.get('gamma_t', 0.0):.4f}"
+            )
+
+        # 6. 컨디셔닝 준비
         conditions = batch["conditions"]
         prompt_embeds = conditions["prompt_embeds"]
         prompt_attention_mask = conditions["prompt_attention_mask"]
-        
-        # First frame conditioning 지원 (선택 사항)
-        conditioning_mask = torch.zeros(B, S, dtype=torch.bool, device=device)
-        # Ring FM에서는 t_star 이전 단계가 Global이므로 별도의 mask 없이도 일관성이 잡히나, 
-        # 기존 코드와의 호환을 위해 0으로 채운 mask를 넘김
-        
+
         sampled_timestep_values = torch.round(t * 1000.0).long()
         timesteps = sampled_timestep_values.unsqueeze(1).expand(B, S)
 
         return TrainingBatch(
             latents=z_t_seq,
-            targets=u_t_seq,
+            targets=u_t_seq, # Stage 2에서는 자동으로 (GroundTruth - Anchor) 방향의 속도가 계산됨
             prompt_embeds=prompt_embeds,
             prompt_attention_mask=prompt_attention_mask,
             timesteps=timesteps,
-            sigmas=t.view(-1, 1, 1),
-            conditioning_mask=conditioning_mask,
-            num_frames=F,
-            height=H,
-            width=W,
-            fps=fps,
-            rope_interpolation_scale=get_rope_scale_factors(fps),
+            sigmas=t.view(-1, 1, 1), # Loss 계산을 위해 t값 보관
+            conditioning_mask=torch.zeros(B, S, dtype=torch.bool, device=device),
+            num_frames=F, height=H, width=W,
+            fps=latents_info.get("fps", [24])[0].item(),
+            rope_interpolation_scale=get_rope_scale_factors(24),
             anchor=anchor,
-            junction_error=self.flow_matching.verify_junction_constraint(noise, x0, anchor)
+            importance_weights=importance_weights  # MCIS 편향 보정 가중치
         )
 
-    def compute_loss(self, model_pred: Tensor, batch: TrainingBatch) -> Tensor:
+    def compute_loss(self, model_pred: torch.Tensor, batch: TrainingBatch) -> torch.Tensor:
         """
-        [원칙 8] Piecewise MSE Loss.
-        u_t가 이미 Ring FM 수식에 의해 t < t* (Global)와 t > t* (Local)로 구분되어 계산됨.
+        [RAB] Combined MSE + Cosine Similarity Loss
+
+        Loss = 0.8 * MSE + 0.2 * (1 - CosineSim)
+        - MSE ensures magnitude accuracy
+        - CosineSim ensures directional alignment
         """
-        loss = (model_pred - batch.targets).pow(2)
-        # Ring FM은 모든 프레임 학습이 중요하므로 mask 없이 전체 평균
-        return loss.mean()
+        B, S, C = model_pred.shape
+        t = batch.sigmas
+        t_flat = t.squeeze()  # (B,)
 
+        # Flatten for per-sample operations
+        pred_flat = model_pred.reshape(B, -1)  # (B, S*C)
+        target_flat = batch.targets.reshape(B, -1)  # (B, S*C)
 
+        # Video dimensions for temporal analysis
+        F_frames, H, W = batch.num_frames, batch.height, batch.width
+
+        # 1. MSE Loss (per-sample)
+        mse_per_sample = torch.mean((pred_flat - target_flat) ** 2, dim=1)  # (B,)
+
+        # 2. Cosine Similarity Loss (per-sample)
+        import torch.nn.functional as F
+        cosine_sim_per_sample = F.cosine_similarity(pred_flat, target_flat, dim=1)  # (B,)
+        cosine_loss_per_sample = 1.0 - cosine_sim_per_sample  # (B,) - Convert to loss
+
+        # 3. [ANTI-AVERAGING] Temporal Diversity Loss - Forces Inter-Frame Variance
+        # Reshape to video: (B, S, C) -> (B, F, H*W*C)
+        pred_video = model_pred.reshape(B, F_frames, H * W * C)  # (B, F, D) where D = H*W*C
+        target_video = batch.targets.reshape(B, F_frames, H * W * C)  # (B, F, D)
+
+        # Compute inter-frame variance for predictions
+        # If model outputs same value for all frames, std→0, penalty→∞
+        pred_frame_std = pred_video.std(dim=1)  # (B, D) - std across frames
+        pred_temporal_variance = pred_frame_std.mean(dim=1)  # (B,) - mean variance
+
+        # Compute target inter-frame variance (ground truth motion)
+        target_frame_std = target_video.std(dim=1)  # (B, D)
+        target_temporal_variance = target_frame_std.mean(dim=1)  # (B,)
+
+        # Temporal Diversity Penalty: penalize pred_variance < target_variance
+        # variance_ratio = 0 (all frames identical) → penalty = 1.0
+        # variance_ratio = 1 (matches target) → penalty = 0.0
+        variance_ratio = pred_temporal_variance / (target_temporal_variance.clamp(min=1e-6))
+        temporal_diversity_loss = torch.clamp(1.0 - variance_ratio, min=0.0) ** 2  # (B,)
+
+        # 4. Combined Loss (per-sample)
+        # 60% MSE, 15% cosine direction, 25% temporal diversity (increased for anti-averaging)
+        combined_loss_per_sample = (
+            0.60 * mse_per_sample +
+            0.15 * cosine_loss_per_sample +
+            0.25 * temporal_diversity_loss
+        )  # (B,)
+
+        # 4. MCIS Importance Weight 적용
+        if hasattr(batch, 'importance_weights'):
+            importance_weights = batch.importance_weights  # (B,)
+        else:
+            importance_weights = torch.ones_like(t_flat)  # (B,)
+
+        # 5. Apply importance weights
+        weighted_loss_per_sample = combined_loss_per_sample * importance_weights  # (B,)
+
+        # ===========================
+        # 📊 RAB 메트릭 로깅
+        # ===========================
+
+        # Compute metrics for logging
+        cosine_sim_mean = cosine_sim_per_sample.mean().item()
+        mse_mean = mse_per_sample.mean().item()
+        temporal_div_mean = temporal_diversity_loss.mean().item()
+        variance_ratio_mean = variance_ratio.mean().item()
+        combined_loss_mean = combined_loss_per_sample.mean().item()
+
+        target_norm = torch.linalg.vector_norm(target_flat, ord=2, dim=1).mean().item()
+        pred_norm = torch.linalg.vector_norm(pred_flat, ord=2, dim=1).mean().item()
+
+        # Temporal variance statistics
+        pred_variance_mean = pred_temporal_variance.mean().item()
+        target_variance_mean = target_temporal_variance.mean().item()
+
+        # MCIS statistics
+        avg_importance_weight = importance_weights.mean().item()
+
+        # Log metrics
+        log_dict = {
+            "loss/cosine_similarity": cosine_sim_mean,
+            "loss/mse": mse_mean,
+            "loss/temporal_diversity": temporal_div_mean,
+            "loss/variance_ratio": variance_ratio_mean,
+            "loss/combined": combined_loss_mean,
+            "loss/target_norm": target_norm,
+            "loss/pred_norm": pred_norm,
+            "loss/pred_temporal_variance": pred_variance_mean,
+            "loss/target_temporal_variance": target_variance_mean,
+            "loss/t_mean": t_flat.mean().item(),
+            "mcis/avg_importance_weight": avg_importance_weight,
+        }
+
+        if wandb.run is not None:
+            wandb.log(log_dict)
+
+        # Terminal logging
+        if self.global_step % 50 == 0:
+            logger.info(
+                f"[Step {self.global_step}] RAB Loss Metrics\n"
+                f"  Cosine: {cosine_sim_mean:.4f}, MSE: {mse_mean:.6f}, "
+                f"Temporal Div: {temporal_div_mean:.6f}, Combined: {combined_loss_mean:.6f}\n"
+                f"  Variance Ratio: {variance_ratio_mean:.4f} (pred: {pred_variance_mean:.4f}, "
+                f"target: {target_variance_mean:.4f})\n"
+                f"  Norms - Target: {target_norm:.4f}, Pred: {pred_norm:.4f}"
+            )
+
+        # Return final loss (mean across batch)
+        final_loss = weighted_loss_per_sample.mean()
+        return final_loss
 
 
 
@@ -537,26 +752,43 @@ class ReferenceVideoTrainingStrategy(TrainingStrategy):
 
 
 
-def get_training_strategy(conditioning_config: ConditioningConfig) -> TrainingStrategy:
+def get_training_strategy(conditioning_config: ConditioningConfig, 
+                         current_step: int = 0, 
+                         auto_transition_step: int = 10000,
+                         use_phase_separation: bool = False) -> TrainingStrategy:
     """
-    기존 팩토리 함수에 Ring FM 모드를 추가.
-    config.mode가 "ring_fm"일 때 작동하도록 설정.
+    Advanced Training Strategy Factory with AFM Phase Separation Support
+    
+    Args:
+        conditioning_config: 조건부 학습 설정
+        current_step: 현재 스텝 (체크포인트 로딩 시)
+        auto_transition_step: AFM Stage 자동 전환 스텝
+        use_phase_separation: AFM Phase Separation 활성화 여부
     """
     conditioning_mode = conditioning_config.mode
 
     if conditioning_mode == "ring_fm":
-        # t_star는 config에서 받아오도록 확장 가능
-        t_star = getattr(conditioning_config, "t_star", 0.8)
-        strategy = RingZipperTrainingStrategy(conditioning_config, t_star=t_star)
+        if use_phase_separation:
+            # AFM Phase Separation 모드
+            from .afm_training_strategy import create_afm_training_strategy
+            strategy = create_afm_training_strategy(
+                conditioning_config, 
+                current_step=current_step,
+                auto_transition_step=auto_transition_step
+            )
+            logger.info(f"🎯 Using AFM Phase Separation Strategy")
+        else:
+            # 기존 통합 Ring FM 모드
+            t_star = getattr(conditioning_config, "t_star", 0.2)
+            strategy = RingZipperTrainingStrategy(conditioning_config, t_star=t_star)
+            logger.info(f"🎯 Using Unified Ring/Zipper FM Strategy")
         
     elif conditioning_mode == "none":
-        from .training_strategy import StandardTrainingStrategy
         strategy = StandardTrainingStrategy(conditioning_config)
     elif conditioning_mode == "reference_video":
-        from .training_strategy import ReferenceVideoTrainingStrategy
         strategy = ReferenceVideoTrainingStrategy(conditioning_config)
     else:
         raise ValueError(f"Unknown conditioning mode: {conditioning_mode}")
 
-    logger.debug(f"🎯 Using {strategy.__class__.__name__} for Ring/Zipper FM")
+    logger.debug(f"🎯 Strategy: {strategy.__class__.__name__}")
     return strategy

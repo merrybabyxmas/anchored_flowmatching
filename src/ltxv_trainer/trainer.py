@@ -113,7 +113,9 @@ class LtxvTrainer:
         self._global_step = -1
         self._checkpoint_paths = []
         self._init_wandb()
-        self._training_strategy = get_training_strategy(self._config.conditioning)
+        # Defer training strategy initialization until after timestep sampler is ready
+        self._training_strategy = None
+        self._afm_config = getattr(self._config, 'afm_training', None)
 
     def train(  # noqa: PLR0912, PLR0915
         self,
@@ -139,9 +141,14 @@ class LtxvTrainer:
             self._init_lora_weights()
 
         self._init_optimizer()
+        self._init_timestep_sampler()
+        
+        # Initialize training strategy after timestep sampler is ready
+        self._init_training_strategy()
+        
+        # Initialize dataloader after training strategy is ready
         self._init_dataloader()
         data_iter = iter(self._dataloader)
-        self._init_timestep_sampler()
 
         # Synchronize all processes after initialization
         self._accelerator.wait_for_everyone()
@@ -152,6 +159,12 @@ class LtxvTrainer:
         self._save_config()
 
         logger.info("🚀 Starting training...")
+
+        # Calculate steps per epoch for logging
+        dataset_size = len(self._dataset)
+        effective_batch_size = cfg.optimization.batch_size * cfg.optimization.gradient_accumulation_steps
+        steps_per_epoch = dataset_size // effective_batch_size
+        logger.info(f"📊 Dataset: {dataset_size} samples, Effective batch: {effective_batch_size}, Steps/epoch: {steps_per_epoch}")
 
         # Create progress columns with simplified styling
         if disable_progress_bars or not IS_MAIN_PROCESS:
@@ -297,18 +310,21 @@ class LtxvTrainer:
                         )
 
                         # Log metrics to W&B
+                        current_epoch = self._global_step / steps_per_epoch
                         self._log_metrics(
                             {
                                 "train/loss": loss.item(),
                                 "train/learning_rate": current_lr,
                                 "train/step_time": step_time,
                                 "train/global_step": self._global_step,
+                                "train/epoch": current_epoch,
                             }
                         )
 
                         if disable_progress_bars and self._global_step % 20 == 0:
+                            current_epoch = self._global_step / steps_per_epoch
                             logger.info(
-                                f"Step {self._global_step}/{cfg.optimization.steps} - "
+                                f"Step {self._global_step}/{cfg.optimization.steps} (Epoch {current_epoch:.2f}) - "
                                 f"Loss: {loss.item():.4f}, LR: {current_lr:.2e}, "
                                 f"Time/Step: {step_time:.2f}s, Total Time: {total_time}",
                             )
@@ -386,6 +402,17 @@ class LtxvTrainer:
 
     def _training_step(self, batch: dict[str, dict[str, Tensor]]) -> Tensor:
         """Perform a single training step using the configured strategy."""
+        # Update global_step in strategy for logging and AFM Phase Management
+        self._training_strategy.global_step = self._global_step
+        
+        # AFM Phase Manager Step Update (if using AFM Phase Training Strategy)
+        if hasattr(self._training_strategy, 'update_step'):
+            self._training_strategy.update_step(self._global_step)
+        
+        # Also update shared phase manager for timestep sampler
+        if hasattr(self, '_shared_phase_manager') and self._shared_phase_manager:
+            self._shared_phase_manager.update_step(self._global_step)
+
         # Use strategy to prepare the training batch
         training_batch = self._training_strategy.prepare_batch(batch, self._timestep_sampler)
 
@@ -397,8 +424,8 @@ class LtxvTrainer:
 
         # Use strategy to compute loss
         loss = self._training_strategy.compute_loss(model_pred, training_batch)
-        
-        
+
+
         # 결과 예: [B, F, C, H, W] -> [1, 25, 3, 768, 768]
 
         return loss
@@ -506,8 +533,53 @@ class LtxvTrainer:
 
     def _init_timestep_sampler(self) -> None:
         """Initialize the timestep sampler based on the config."""
-        sampler_cls = SAMPLERS[self._config.flow_matching.timestep_sampling_mode]
-        self._timestep_sampler = sampler_cls(**self._config.flow_matching.timestep_sampling_params)
+        sampler_mode = self._config.flow_matching.timestep_sampling_mode
+        sampler_params = self._config.flow_matching.timestep_sampling_params
+        
+        # AFM Phase Samplers need special handling
+        if sampler_mode in ["afm_phase", "afm_hybrid", "afm_hybrid_identity"] and self._afm_config and self._afm_config.use_phase_separation:
+            # Create shared phase manager for both sampler and strategy
+            from ltxv_trainer.afm_phase_manager import AFMPhaseManager
+            self._shared_phase_manager = AFMPhaseManager(
+                current_step=0,
+                auto_transition_step=self._afm_config.auto_transition_step
+            )
+            
+            # Inject phase manager into sampler params
+            sampler_cls = SAMPLERS[sampler_mode]
+            self._timestep_sampler = sampler_cls(phase_manager=self._shared_phase_manager, **sampler_params)
+        else:
+            # Standard sampler initialization
+            sampler_cls = SAMPLERS[sampler_mode]
+            self._timestep_sampler = sampler_cls(**sampler_params)
+            self._shared_phase_manager = None
+
+    def _init_training_strategy(self) -> None:
+        """Initialize the training strategy with AFM Phase Separation support."""
+        # AFM Phase Separation Support
+        if self._afm_config and self._afm_config.use_phase_separation:
+            # Use shared phase manager if available, otherwise create new one
+            if hasattr(self, '_shared_phase_manager') and self._shared_phase_manager:
+                from .afm_training_strategy import AFMPhaseTrainingStrategy
+                self._training_strategy = AFMPhaseTrainingStrategy(
+                    self._config.conditioning, 
+                    self._shared_phase_manager
+                )
+            else:
+                # Fallback to factory method
+                self._training_strategy = get_training_strategy(
+                    self._config.conditioning,
+                    current_step=0,
+                    auto_transition_step=self._afm_config.auto_transition_step,
+                    use_phase_separation=self._afm_config.use_phase_separation
+                )
+        else:
+            # Legacy mode
+            self._training_strategy = get_training_strategy(self._config.conditioning)
+        
+        # Set accelerator and global_step reference for logging in training strategy
+        self._training_strategy.accelerator = self._accelerator
+        self._training_strategy.global_step = 0
 
     def _setup_lora(self) -> None:
         """Configure LoRA adapters for the transformer. Only called in LoRA training mode."""

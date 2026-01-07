@@ -113,10 +113,83 @@ class ShiftedLogitNormalTimestepSampler:
         return shift
 
 
+class MotionCentricImportanceSampler(TimestepSampler):
+    """
+    Motion-Centric Importance Sampling (MCIS) for AFM Temporal Collapse 해결
+    
+    샘플링 분포: 전체 샘플의 70%를 Local Phase [0, t_boundary]에서, 
+                30%를 Global Phase (t_boundary, 1.0]에서 추출
+    """
+    
+    def __init__(self, t_boundary: float = 0.2, local_ratio: float = 0.7):
+        self.t_boundary = t_boundary
+        self.local_ratio = local_ratio
+        self.global_ratio = 1.0 - local_ratio
+    
+    def sample(self, batch_size: int, seq_length: int | None = None, device: torch.device = None) -> torch.Tensor:
+        """Sample timesteps with Motion-Centric Importance Sampling"""
+        # 배치 크기에 따른 Local/Global 샘플 수 결정
+        num_local_samples = int(batch_size * self.local_ratio)
+        num_global_samples = batch_size - num_local_samples
+        
+        # Local Phase 샘플링: [0, t_boundary]
+        local_samples = torch.rand(num_local_samples, device=device) * self.t_boundary
+        
+        # Global Phase 샘플링: (t_boundary, 1.0]
+        global_samples = torch.rand(num_global_samples, device=device) * (1.0 - self.t_boundary) + self.t_boundary
+        
+        # 결합 및 섞기
+        all_samples = torch.cat([local_samples, global_samples])
+        shuffled_indices = torch.randperm(batch_size, device=device)
+        
+        return all_samples[shuffled_indices]
+    
+    def sample_for(self, batch: torch.Tensor) -> torch.Tensor:
+        """Sample timesteps for a specific batch tensor"""
+        if batch.ndim != 3:
+            raise ValueError(f"Batch should have 3 dimensions, got {batch.ndim}")
+        
+        batch_size, seq_length, _ = batch.shape
+        return self.sample(batch_size, device=batch.device)
+    
+    def get_importance_weight(self, t: torch.Tensor) -> torch.Tensor:
+        """
+        Importance Weight 계산 - 샘플링 편향 보정
+        
+        수학적 기댓값 유지를 위해:
+        - Local 구간 (over-sampled): 낮은 가중치 (1/local_ratio)
+        - Global 구간 (under-sampled): 높은 가중치 (1/global_ratio)
+        """
+        is_local = t <= self.t_boundary
+        
+        # 정확한 Importance Weight 계산
+        # p_uniform(t) = 1.0 (uniform distribution over [0,1])
+        # p_mcis(t) = local_ratio/t_boundary (local) or global_ratio/(1-t_boundary) (global)
+        # weight = p_uniform(t) / p_mcis(t)
+        
+        local_weight = self.t_boundary / self.local_ratio  # = 0.2 / 0.7 ≈ 0.286
+        global_weight = (1.0 - self.t_boundary) / self.global_ratio  # = 0.8 / 0.3 ≈ 2.667
+        
+        return torch.where(is_local, local_weight, global_weight)
+
+
+# Import AFM samplers
+try:
+    from ltxv_trainer.afm_timestep_samplers import AFM_SAMPLERS
+    afm_samplers_available = True
+except ImportError:
+    AFM_SAMPLERS = {}
+    afm_samplers_available = False
+
 SAMPLERS = {
     "uniform": UniformTimestepSampler,
     "shifted_logit_normal": ShiftedLogitNormalTimestepSampler,
+    "motion_centric": MotionCentricImportanceSampler,
 }
+
+# Add AFM samplers if available
+if afm_samplers_available:
+    SAMPLERS.update(AFM_SAMPLERS)
 
 
 def example() -> None:
