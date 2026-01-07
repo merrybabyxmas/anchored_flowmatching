@@ -30,3 +30,5 @@ outputs
 wandb/
 outputs/
 *.log
+
+*.wandb
