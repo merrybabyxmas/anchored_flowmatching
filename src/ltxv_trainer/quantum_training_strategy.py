@@ -147,10 +147,10 @@ class QuantumTrainingStrategy:
     
     def prepare_model_inputs(self, training_batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
-        Prepare model inputs with Temporal Embedding Overdrive.
+        Prepare model inputs with Safe Temporal Processing.
         
-        Key innovation: Amplify frame index embeddings by 5x to force the model
-        to strongly differentiate between frames during the state collapse process.
+        Correction: Removed unsafe index amplification that caused embedding overflow.
+        Temporal distinction is now handled by QuantumAnchorNetwork factor or internal model attention.
         """
         z_t = training_batch["z_t"]
         t = training_batch["t"]
@@ -163,20 +163,19 @@ class QuantumTrainingStrategy:
         z_t_seq = z_t.permute(0, 2, 3, 4, 1).reshape(B, 1, seq_len, C)
         timesteps = t.unsqueeze(1)  # (B, 1)
         
-        # TEMPORAL EMBEDDING OVERDRIVE: 5x amplification
-        # Create amplified frame position embeddings
+        # Create frame position embeddings (Standard 0..F-1 range)
         frame_pos_flat = frame_indices.unsqueeze(-1).repeat(1, 1, H*W).reshape(B, seq_len)  # (B, seq_len)
         
-        # Apply 5x amplification to frame indices for stronger temporal signal
-        amplified_frame_pos = frame_pos_flat.float() * self.temporal_embedding_amplification
+        # SAFE: Do not amplify indices directly. Keep them within valid range.
+        # The 'overdrive' effect is shifted to QuantumAnchorNetwork or handled by model internals.
         
         return {
             "hidden_states": z_t_seq,
             "timestep": timesteps,
             "encoder_hidden_states": None,  # No text conditioning
             "encoder_attention_mask": None,
-            "frame_positions": amplified_frame_pos.long(),  # Amplified temporal signal
-            "quantum_overdrive": True,  # Flag for model to use overdrive
+            "frame_positions": frame_pos_flat.long(),  # Original safe indices
+            "quantum_overdrive": False,  # Disabled unsafe overdrive
         }
     
     def compute_loss(self, model_pred: torch.Tensor, training_batch: Dict[str, torch.Tensor]) -> torch.Tensor:
@@ -185,17 +184,19 @@ class QuantumTrainingStrategy:
         
         Combines:
         1. Standard flow matching loss (MSE)
-        2. Orthogonality loss (frame uniqueness enforcement)
+        2. Orthogonality loss (frame uniqueness enforcement) - With Linear Warm-up
         3. Quantum decoherence penalties
         """
         u_t = training_batch["u_t"]
         t = training_batch["t"]
-        B, C, F, H, W = u_t.shape
+        B, C, num_frames, H, W = u_t.shape
 
         # Reshape model prediction to match target format
-        model_pred_reshaped = model_pred.squeeze(1).view(B, F, H, W, C).permute(0, 4, 1, 2, 3)
+        # Use num_frames instead of F to avoid shadowing torch.nn.functional
+        model_pred_reshaped = model_pred.squeeze(1).view(B, num_frames, H, W, C).permute(0, 4, 1, 2, 3)
 
         # 1. Primary Flow Matching Loss (MSE)
+        # Use F.mse_loss (F is torch.nn.functional)
         flow_loss = F.mse_loss(model_pred_reshaped, u_t)
 
         # 2. Orthogonality Loss for Frame Uniqueness (Quantum Non-Redundancy)
@@ -205,8 +206,14 @@ class QuantumTrainingStrategy:
         collapse_mask = (t < self.flow_matching.t_star).float()
         decoherence_penalty = collapse_mask.mean() * orthogonality_loss
         
+        # Loss Balancing: Linear Warm-up for Orthogonality Loss (0 to 1.0 over 1000 steps)
+        warmup_steps = 1000.0
+        warmup_factor = min(1.0, self.global_step / warmup_steps)
+
+        effective_orthogonality_weight = self.orthogonality_loss_weight * warmup_factor
+
         # Total Quantum Loss
-        total_loss = flow_loss + self.orthogonality_loss_weight * (orthogonality_loss + decoherence_penalty)
+        total_loss = flow_loss + effective_orthogonality_weight * (orthogonality_loss + decoherence_penalty)
 
         # 4. Quantum diagnostics and logging
         if self.global_step % self.quantum_metrics_log_interval == 0:

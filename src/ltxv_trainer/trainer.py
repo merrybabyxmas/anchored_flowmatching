@@ -529,6 +529,15 @@ class LtxvTrainer:
             raise ValueError(f"Unknown training mode: {self._config.model.training_mode}")
 
         self._trainable_params = [p for p in self._transformer.parameters() if p.requires_grad]
+
+        # Include QuantumAnchorNetwork parameters if available
+        if hasattr(self._training_strategy, 'flow_matching') and hasattr(self._training_strategy.flow_matching, 'anchor_net'):
+            anchor_net = self._training_strategy.flow_matching.anchor_net
+            if anchor_net is not None:
+                anchor_params = [p for p in anchor_net.parameters() if p.requires_grad]
+                self._trainable_params.extend(anchor_params)
+                logger.debug(f"Added {len(anchor_params)} QuantumAnchorNetwork parameters")
+
         logger.debug(f"Trainable params count: {sum(p.numel() for p in self._trainable_params):,}")
 
     def _init_timestep_sampler(self) -> None:
@@ -609,8 +618,25 @@ class LtxvTrainer:
         state_dict = load_file(checkpoint_path)
 
         if self._config.model.training_mode == "full":
+            # Extract anchor net weights if present
+            if hasattr(self._training_strategy, 'flow_matching') and hasattr(self._training_strategy.flow_matching, 'anchor_net'):
+                anchor_net = self._training_strategy.flow_matching.anchor_net
+                if anchor_net is not None:
+                    anchor_keys = [k for k in state_dict.keys() if k.startswith("anchor_net.")]
+                    if anchor_keys:
+                        anchor_state = {k.replace("anchor_net.", ""): state_dict.pop(k) for k in anchor_keys}
+                        anchor_net.load_state_dict(anchor_state)
+                        logger.info(f"📥 Loaded QuantumAnchorNetwork from checkpoint")
+
             transformer.load_state_dict(state_dict)
         else:  # LoRA mode
+            # Try to load anchor net from separate file if it exists
+            anchor_path = checkpoint_path.parent / f"anchor_net_{checkpoint_path.name.replace('lora_weights_', '')}"
+            if anchor_path.exists() and hasattr(self._training_strategy, 'flow_matching') and hasattr(self._training_strategy.flow_matching, 'anchor_net'):
+                 anchor_net = self._training_strategy.flow_matching.anchor_net
+                 if anchor_net is not None:
+                     anchor_net.load_state_dict(load_file(anchor_path))
+                     logger.info(f"📥 Loaded QuantumAnchorNetwork from {anchor_path.name}")
             # Adjust layer names to match PEFT format
             state_dict = {k.replace("transformer.", "", 1): v for k, v in state_dict.items()}
             state_dict = {k.replace("lora_A", "lora_A.default", 1): v for k, v in state_dict.items()}
@@ -904,12 +930,33 @@ class LtxvTrainer:
 
         if self._config.model.training_mode == "full":
             state_dict = unwrapped_model.state_dict()
+
+            # Save anchor net if it exists
+            if hasattr(self._training_strategy, 'flow_matching') and hasattr(self._training_strategy.flow_matching, 'anchor_net'):
+                 anchor_net = self._training_strategy.flow_matching.anchor_net
+                 if anchor_net is not None:
+                     anchor_state = anchor_net.state_dict()
+                     # Prefix keys to avoid collision
+                     anchor_state = {f"anchor_net.{k}": v for k, v in anchor_state.items()}
+                     state_dict.update(anchor_state)
+
             save_file(state_dict, saved_weights_path)
             logger.info(f"💾 Model weights for step {self._global_step} saved in {rel_saved_weights_path}")
         elif self._config.model.training_mode == "lora":
             state_dict = get_peft_model_state_dict(unwrapped_model)
             # Adjust layer names to standard formatting.
             state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+
+            # Save anchor net separately or included? LoRA usually saves adapter only.
+            # But anchor net is not LoRA. We should save it alongside.
+            # LTXConditionPipeline.save_lora_weights might not support extra keys.
+            # We will save anchor net as a separate file for safety in LoRA mode
+            if hasattr(self._training_strategy, 'flow_matching') and hasattr(self._training_strategy.flow_matching, 'anchor_net'):
+                 anchor_net = self._training_strategy.flow_matching.anchor_net
+                 if anchor_net is not None:
+                     anchor_path = save_dir / f"anchor_net_step_{self._global_step:05d}.safetensors"
+                     save_file(anchor_net.state_dict(), anchor_path)
+
             LTXConditionPipeline.save_lora_weights(
                 save_directory=save_dir,
                 transformer_lora_layers=state_dict,
