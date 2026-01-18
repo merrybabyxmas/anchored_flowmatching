@@ -2,14 +2,15 @@
 Quantum State Collapse Training Strategy
 
 Implements the complete quantum architecture with:
-- Quantum Flow Matching
-- Temporal Embedding Overdrive (5x amplification)
-- Orthogonality Loss for frame uniqueness
+- Spherical Geodesic Flow Matching (Slerp + Projected Velocity)
+- Two-Phase Training (Image Phase & Video Phase)
+- Probabilistic Phase Switching
 - Quantum metrics logging
 """
 import torch
 import torch.nn.functional as F
 import wandb
+import random
 from typing import Dict, Any, Set, Optional
 
 from ltxv_trainer import logger
@@ -19,7 +20,7 @@ from .quantum_collapse_flow import QuantumStateCollapseFlowMatching, create_quan
 class QuantumTrainingStrategy:
     """Quantum State Collapse Training Strategy Implementation."""
 
-    def __init__(self, t_star: float = 0.2, use_anchor_net: bool = False):
+    def __init__(self, t_star: float = 0.2, use_anchor_net: bool = True):
         self.flow_matching = create_quantum_flow_matching(
             t_star=t_star,
             latent_dim=128,  # Will be updated based on actual data
@@ -28,9 +29,10 @@ class QuantumTrainingStrategy:
         self.accelerator = None  # Will be set by trainer
         self.global_step = 0  # Will be updated by trainer
         
-        # Quantum-specific hyperparameters
-        self.temporal_embedding_amplification = 5.0  # 5x overdrive
-        self.orthogonality_loss_weight = 0.1  # Weight for frame uniqueness loss
+        # Phase probabilities
+        self.image_phase_prob = 0.2  # 20% Image Phase (Noise -> Anchor)
+        # Remaining 80% is Video Phase (Anchor -> Video)
+
         self.quantum_metrics_log_interval = 50  # Log quantum metrics every N steps
     
     def get_data_sources(self) -> Set[str]:
@@ -41,10 +43,9 @@ class QuantumTrainingStrategy:
         """
         Prepare batch for Quantum State Collapse Flow Matching training.
         
-        Includes:
-        - Quantum anchor computation
-        - Temporal embedding overdrive preparation
-        - Frame index extraction for state collapse
+        Implements Probabilistic Phase Switching:
+        - Image Phase: Learn Noise -> Anchor (Identity Formation)
+        - Video Phase: Learn Anchor -> Video (Temporal Collapse)
         """
         # 1. Extract and prepare data
         if "latents" in batch:
@@ -61,22 +62,21 @@ class QuantumTrainingStrategy:
         else:
             x0 = latents_data
 
-        # 2. Device alignment for quantum computations
+        # 2. Device alignment
         device = x0.device
         x0 = x0.to(device)
 
         # 3. Dimension handling and validation
         if x0.dim() == 5:
-            B, C, F, H, W = x0.shape
-            B, C, F, H, W = int(B), int(C), int(F), int(H), int(W)
+            B, C, num_frames, H, W = x0.shape
+            B, C, num_frames, H, W = int(B), int(C), int(num_frames), int(H), int(W)
         elif x0.dim() == 4:
             B, _, seq_len, latent_dim = x0.shape
             B, seq_len, latent_dim = int(B), int(seq_len), int(latent_dim)
-
             # Default configuration for LTX-Video
-            F, H, W = 16, 8, 8
+            num_frames, H, W = 16, 8, 8
             C = latent_dim
-            x0 = x0.squeeze(1).view(B, F, H, W, C).permute(0, 4, 1, 2, 3)
+            x0 = x0.squeeze(1).view(B, num_frames, H, W, C).permute(0, 4, 1, 2, 3)
 
         # 4. Update flow matching latent dimension if needed
         if hasattr(self.flow_matching, 'anchor_net') and self.flow_matching.anchor_net:
@@ -88,223 +88,191 @@ class QuantumTrainingStrategy:
                     anchor_net=anchor_net
                 )
 
-        # 5. Quantum flow matching computations
-        B = x0.shape[0]
+        # 5. Extract Anchor (Identity)
+        # Returns (B, C, 1, H, W), normalized
+        anchor = self.flow_matching.compute_quantum_anchor(x0)
+        
+        # 6. Probabilistic Phase Switching
+        # We decide the phase for the entire batch to keep tensor shapes consistent
+        is_image_phase = random.random() < self.image_phase_prob
+        
         t = timestep_sampler.sample(B).to(device)
-
-        # Quantum noise (shared across frames for coherence)
-        noise = self.flow_matching.sample_noise(x0.shape).to(device)
-
-        # Quantum anchor computation (superposition state)
-        anchor, mu, log_sigma2 = self.flow_matching.compute_quantum_anchor(x0)
-
-        # Quantum path and velocity
-        z_t = self.flow_matching.compute_forward_path(noise, x0, t, anchor=anchor)
-        u_t = self.flow_matching.compute_teacher_velocity(noise, x0, t, anchor=anchor)
-
-        # 6. Frame index generation for temporal embedding overdrive
-        frame_indices = torch.arange(F, device=device).unsqueeze(0).expand(B, -1)  # (B, F)
         
-        # 7. Quantum state analysis
-        quantum_metrics = self.flow_matching.get_quantum_metrics()
-        
-        # Compute quantum-specific diagnostics
-        state_collapse_energy = self._compute_state_collapse_energy(x0, anchor)
-        frame_divergence = self._compute_frame_divergence(x0)
-        
-        # 8. Enhanced logging with quantum metrics
+        if is_image_phase:
+            # --- Image Phase: Noise -> Anchor ---
+            # Source: Noise (Spherical)
+            # Target: Anchor
+            # Time: 1 (Noise) -> 0 (Anchor) (Standard Flow Matching convention is usually 0->1 or 1->0 depending on formulation)
+            # LTX-Video convention (based on previous code): t=1.0(Noise) -> t=0.0(Data)
+
+            source = self.flow_matching.sample_noise(anchor.shape).to(device) # (B, C, 1, H, W)
+            target = anchor # (B, C, 1, H, W)
+
+            # Since target is Anchor (Data), and source is Noise.
+            # Forward Path z_t interpolates between Source and Target.
+            # If t=1 is Noise, t=0 is Target.
+
+            # z_t calculation using Slerp
+            # Note: slerp(source, target, t) usually means t=0 -> source, t=1 -> target.
+            # But if we want t=1 to be Noise, we should map t correctly.
+            # Let's assume standard FM: x1 (data), x0 (noise). z_t = t*x1 + (1-t)*x0.
+            # Then t=0 is noise, t=1 is data.
+            # But the previous code comment said: "t=1.0(Noise) -> t=0.0(Data)".
+            # Let's stick to the previous convention if possible, OR switch to standard FM.
+            # Let's look at `ltxv_pipeline.py`. It calls `scheduler.step`.
+            # Usually diffusers schedulers go from T to 0.
+            # So t=1.0 (High Noise) -> t=0.0 (Clean Data).
+
+            # If t=1 is Noise (x0) and t=0 is Data (x1).
+            # Then z_t should be close to x0 when t=1.
+            # slerp(x1, x0, t) -> t=0 => x1(Data), t=1 => x0(Noise).
+            # This matches "t=1(Noise) -> t=0(Data)".
+
+            z_t = self.flow_matching.compute_forward_path(target, source, t)
+            u_t = self.flow_matching.compute_teacher_velocity(target, source, t, z_t)
+
+            # Broadcast to match F if necessary?
+            # Ideally, we train on F=1 to save compute.
+            # But trainer might expect consistent F.
+            # If we return F=1 tensor, prepare_model_inputs needs to handle it.
+            # Let's return F=1 tensor.
+
+            phase_name = "image"
+
+        else:
+            # --- Video Phase: Anchor -> Video ---
+            # Source: Anchor (broadcasted)
+            # Target: Video
+            # t=1 (Anchor) -> t=0 (Video)
+
+            # Note: Here "Noise" is the Anchor.
+            # So t=1 => Anchor, t=0 => Video.
+
+            # Use shape from x0 to determine F
+            num_frames = x0.shape[2]
+            source = anchor.expand(-1, -1, num_frames, -1, -1) # (B, C, F, H, W)
+            target = x0 # (B, C, F, H, W)
+
+            # Ensure target is normalized (Manifold Constraint)
+            target = F.normalize(target, p=2, dim=1)
+
+            z_t = self.flow_matching.compute_forward_path(target, source, t)
+            u_t = self.flow_matching.compute_teacher_velocity(target, source, t, z_t)
+
+            phase_name = "video"
+
+        # 7. Quantum metrics logging
         if self.global_step % self.quantum_metrics_log_interval == 0:
             log_dict = {
-                "quantum/state_collapse_energy": state_collapse_energy,
-                "quantum/frame_divergence": frame_divergence,
-                "quantum/anchor_entropy": torch.std(anchor).item(),
-                "quantum/superposition_strength": torch.var(mu).item(),
-                **quantum_metrics
+                "quantum/phase": 1.0 if is_image_phase else 0.0,
+                "quantum/anchor_norm": torch.norm(anchor, p=2, dim=1).mean().item(),
+                "quantum/z_t_norm": torch.norm(z_t, p=2, dim=1).mean().item(),
             }
-            
             if wandb.run is not None:
                 wandb.log(log_dict, step=self.global_step)
             
             logger.info(
-                f"[Quantum Step {self.global_step}] "
-                f"Collapse Energy: {state_collapse_energy:.4f}, "
-                f"Frame Divergence: {frame_divergence:.4f}, "
-                f"Anchor Entropy: {log_dict['quantum/anchor_entropy']:.4f}"
+                f"[Quantum Step {self.global_step}] Phase: {phase_name}, "
+                f"Anchor Norm: {log_dict['quantum/anchor_norm']:.4f}"
             )
 
         return {
             "z_t": z_t,
             "u_t": u_t,
             "t": t,
-            "x0": x0,
-            "noise": noise,
-            "anchor": anchor,
-            "mu": mu,
-            "log_sigma2": log_sigma2,
-            "frame_indices": frame_indices,
-            "quantum_metrics": quantum_metrics
+            "phase": phase_name,
+            "frame_indices": torch.arange(z_t.shape[2], device=device).unsqueeze(0).expand(B, -1)
         }
     
     def prepare_model_inputs(self, training_batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
-        Prepare model inputs with Safe Temporal Processing.
-        
-        Correction: Removed unsafe index amplification that caused embedding overflow.
-        Temporal distinction is now handled by QuantumAnchorNetwork factor or internal model attention.
+        Prepare model inputs.
+        Handles both Image Phase (F=1) and Video Phase (F=16).
         """
         z_t = training_batch["z_t"]
         t = training_batch["t"]
         frame_indices = training_batch["frame_indices"]
         
-        B, C, F, H, W = z_t.shape
-        seq_len = F * H * W
+        B, C, num_frames, H, W = z_t.shape
+        seq_len = num_frames * H * W
         
         # Reshape to sequence format for transformer
+        # (B, C, F, H, W) -> (B, F, H, W, C) -> (B, 1, S, C) ?
+        # LTXVideoTransformer usually takes (B, C, F, H, W) or (B, S, C)?
+        # Checking trainer.py... it just passes **model_inputs.
+        # Let's check `ltxv_pipeline.py`. It packs latents.
+        # But `trainer.py` uses `self._transformer`.
+        # `src/ltxv_trainer/quantum_training_strategy.py` previously did:
+        # z_t_seq = z_t.permute(0, 2, 3, 4, 1).reshape(B, 1, seq_len, C)
+        # return {"hidden_states": z_t_seq, ...}
+
         z_t_seq = z_t.permute(0, 2, 3, 4, 1).reshape(B, 1, seq_len, C)
         timesteps = t.unsqueeze(1)  # (B, 1)
         
-        # Create frame position embeddings (Standard 0..F-1 range)
+        # Create frame position embeddings
         frame_pos_flat = frame_indices.unsqueeze(-1).repeat(1, 1, H*W).reshape(B, seq_len)  # (B, seq_len)
         
-        # SAFE: Do not amplify indices directly. Keep them within valid range.
-        # The 'overdrive' effect is shifted to QuantumAnchorNetwork or handled by model internals.
+        # Manifold Constraint: Ensure input to model is normalized?
+        # z_t is already normalized from prepare_batch.
         
         return {
             "hidden_states": z_t_seq,
             "timestep": timesteps,
             "encoder_hidden_states": None,  # No text conditioning
             "encoder_attention_mask": None,
-            "frame_positions": frame_pos_flat.long(),  # Original safe indices
-            "quantum_overdrive": False,  # Disabled unsafe overdrive
+            "frame_positions": frame_pos_flat.long(),
+            "quantum_overdrive": False,
         }
     
     def compute_loss(self, model_pred: torch.Tensor, training_batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
-        Compute Quantum State Collapse Loss.
+        Compute Projected Flow Matching Loss.
         
-        Combines:
-        1. Standard flow matching loss (MSE)
-        2. Orthogonality loss (frame uniqueness enforcement) - With Linear Warm-up
-        3. Quantum decoherence penalties
+        Loss = || v_theta - u_t_proj ||^2
         """
         u_t = training_batch["u_t"]
-        t = training_batch["t"]
+        # model_pred comes from transformer.
+        # Shape of model_pred: (B, 1, SeqLen, C) based on input?
+        # Or (B, SeqLen, C)?
+        # Previous code: model_pred_reshaped = model_pred.squeeze(1).view(B, num_frames, H, W, C).permute(0, 4, 1, 2, 3)
+
         B, C, num_frames, H, W = u_t.shape
 
         # Reshape model prediction to match target format
-        # Use num_frames instead of F to avoid shadowing torch.nn.functional
-        model_pred_reshaped = model_pred.squeeze(1).view(B, num_frames, H, W, C).permute(0, 4, 1, 2, 3)
+        # Assuming model_pred is (B, 1, S, C) or (B, S, C)
+        if model_pred.dim() == 4 and model_pred.shape[1] == 1:
+            model_pred = model_pred.squeeze(1)
 
-        # 1. Primary Flow Matching Loss (MSE)
-        # Use F.mse_loss (F is torch.nn.functional)
+        model_pred_reshaped = model_pred.view(B, num_frames, H, W, C).permute(0, 4, 1, 2, 3)
+
+        # 1. Projected Flow Matching Loss (MSE)
+        # Both u_t and model_pred are in tangent space (ideally).
+        # u_t is guaranteed by construction.
+        # model_pred is learned.
         flow_loss = F.mse_loss(model_pred_reshaped, u_t)
-
-        # 2. Orthogonality Loss for Frame Uniqueness (Quantum Non-Redundancy)
-        orthogonality_loss = self.flow_matching.compute_orthogonality_loss(model_pred_reshaped)
         
-        # 3. Quantum Decoherence Loss (stronger penalty during collapse phase)
-        collapse_mask = (t < self.flow_matching.t_star).float()
-        decoherence_penalty = collapse_mask.mean() * orthogonality_loss
-        
-        # Loss Balancing: Linear Warm-up for Orthogonality Loss (0 to 1.0 over 1000 steps)
-        warmup_steps = 1000.0
-        warmup_factor = min(1.0, self.global_step / warmup_steps)
-
-        effective_orthogonality_weight = self.orthogonality_loss_weight * warmup_factor
-
-        # Total Quantum Loss
-        total_loss = flow_loss + effective_orthogonality_weight * (orthogonality_loss + decoherence_penalty)
-
-        # 4. Quantum diagnostics and logging
+        # 2. Logging
         if self.global_step % self.quantum_metrics_log_interval == 0:
-            # Frame-wise analysis
-            pred_flat = model_pred_reshaped.reshape(B, -1)
-            target_flat = u_t.reshape(B, -1)
-            
-            cosine_sim = F.cosine_similarity(pred_flat, target_flat, dim=1).mean().item()
-            target_norm = torch.linalg.vector_norm(target_flat, ord=2, dim=1).mean().item()
-            pred_norm = torch.linalg.vector_norm(pred_flat, ord=2, dim=1).mean().item()
-            
-            # Quantum-specific metrics
-            quantum_metrics = training_batch.get("quantum_metrics", {})
+            pred_norm = torch.norm(model_pred_reshaped, p=2, dim=1).mean().item()
+            target_norm = torch.norm(u_t, p=2, dim=1).mean().item()
             
             log_dict = {
                 "loss/flow_matching": flow_loss.item(),
-                "loss/orthogonality": orthogonality_loss.item(),
-                "loss/decoherence_penalty": decoherence_penalty.item(),
-                "loss/total_quantum": total_loss.item(),
-                "loss/cosine_similarity": cosine_sim,
-                "loss/target_norm": target_norm,
-                "loss/pred_norm": pred_norm,
-                "quantum/collapse_phase_ratio": collapse_mask.mean().item(),
-                **quantum_metrics
+                "loss/pred_velocity_norm": pred_norm,
+                "loss/target_velocity_norm": target_norm,
             }
-            
             if wandb.run is not None:
                 wandb.log(log_dict, step=self.global_step)
             
             logger.info(
-                f"[Quantum Loss {self.global_step}] "
-                f"Flow: {flow_loss.item():.4f}, "
-                f"Orthogonal: {orthogonality_loss.item():.4f}, "
-                f"Total: {total_loss.item():.4f}"
+                f"[Quantum Loss {self.global_step}] Loss: {flow_loss.item():.4f}, "
+                f"PredNorm: {pred_norm:.4f}, TargetNorm: {target_norm:.4f}"
             )
 
-        return total_loss
-    
-    def _compute_state_collapse_energy(self, x0: torch.Tensor, anchor: torch.Tensor) -> float:
-        """
-        Compute quantum state collapse energy.
-        
-        Measures how much the frames deviate from the anchor (superposition breakdown).
-        Higher values indicate stronger frame individuality.
-        """
-        B, C, F, H, W = x0.shape
-        anchor_expanded = anchor.expand(-1, -1, F, -1, -1)
-        
-        # Frame-wise deviation from anchor
-        frame_deviations = torch.norm(x0 - anchor_expanded, dim=(1, 3, 4))  # (B, F)
-        collapse_energy = frame_deviations.mean().item()
-        
-        return collapse_energy
-    
-    def _compute_frame_divergence(self, x0: torch.Tensor) -> float:
-        """
-        Compute inter-frame divergence.
-        
-        Measures how different frames are from each other.
-        Higher values indicate better frame uniqueness (anti-averaging).
-        """
-        B, C, F, H, W = x0.shape
-        
-        # Compute pairwise frame differences
-        frames_flat = x0.reshape(B, C, F, -1)  # (B, C, F, H*W)
-        frame_means = frames_flat.mean(dim=-1)  # (B, C, F)
-        
-        # Pairwise distances between frame means
-        frame_diffs = []
-        for i in range(F):
-            for j in range(i+1, F):
-                diff = torch.norm(frame_means[:, :, i] - frame_means[:, :, j], dim=1)
-                frame_diffs.append(diff)
-        
-        if frame_diffs:
-            avg_divergence = torch.stack(frame_diffs).mean().item()
-        else:
-            avg_divergence = 0.0
-            
-        return avg_divergence
+        return flow_loss
 
-
-def get_quantum_training_strategy(t_star: float = 0.2, use_anchor_net: bool = False) -> QuantumTrainingStrategy:
+def get_quantum_training_strategy(t_star: float = 0.2, use_anchor_net: bool = True) -> QuantumTrainingStrategy:
     """
     Factory function to create Quantum Training Strategy.
-    
-    Args:
-        t_star: Quantum decoherence threshold
-        use_anchor_net: Whether to use learnable quantum anchor network
-        
-    Returns:
-        QuantumTrainingStrategy instance
     """
     return QuantumTrainingStrategy(t_star=t_star, use_anchor_net=use_anchor_net)

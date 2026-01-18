@@ -1397,6 +1397,17 @@ class LTXConditionPipeline(DiffusionPipeline, FromSingleFileMixin, LTXVideoLoraL
                     # Local Phase: 전체 프레임 업데이트
                     latents = denoised_step_result
 
+                # Manifold Constraint: Force latents to stay on the Hypersphere (Norm=1)
+                # Unpack -> Normalize -> Repack to ensure per-pixel constraint
+                unpacked_latents = self._unpack_latents(
+                    latents, latent_num_frames, latent_height, latent_width,
+                    self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+                )
+                unpacked_latents = torch.nn.functional.normalize(unpacked_latents, p=2, dim=1)
+                latents = self._pack_latents(
+                    unpacked_latents, self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+                )
+
                 # G. 메모리 정리 및 진행바 업데이트
                 if abs(current_t_normalized - t_boundary) < 0.02:
                     torch.cuda.empty_cache()

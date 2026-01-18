@@ -1,16 +1,15 @@
 """
-Quantum State Collapse Flow Matching Implementation
+Quantum Spherical Geodesic Flow Matching Implementation
 
-Quantum-inspired architecture to solve Averaging Collapse in video generation:
-- Quantum Anchor: Stochastic superposition state containing all frame possibilities
-- State Collapse: Frame-specific decoherence through measurement (frame index)
-- Non-Redundancy: Orthogonality enforcement between frame predictions
-- Frame Repulsion: Anti-averaging forces in local stage (t < 0.2)
+Replaces Euclidean linear interpolation with Spherical Geodesic paths.
+- Manifold: Hypersphere (Norm=1).
+- Dynamics: Rotation (Slerp) + Projected Velocity.
+- Two-Phase Generation: Image Phase (Noise->Anchor) -> Video Phase (Anchor->Video).
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 from abc import ABC, abstractmethod
 
 
@@ -23,453 +22,179 @@ class FlowMatchingBase(ABC):
         pass
     
     @abstractmethod
-    def compute_forward_path(self, noise: torch.Tensor, target: torch.Tensor, t: torch.Tensor, **kwargs) -> torch.Tensor:
+    def compute_forward_path(self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor, **kwargs) -> torch.Tensor:
         """Compute the forward path Z(t)."""
         pass
     
     @abstractmethod
-    def compute_teacher_velocity(self, noise: torch.Tensor, target: torch.Tensor, t: torch.Tensor, **kwargs) -> torch.Tensor:
+    def compute_teacher_velocity(self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor, z_t: torch.Tensor, **kwargs) -> torch.Tensor:
         """Compute the exact teacher velocity u(t)."""
         pass
 
 
 class QuantumAnchorNetwork(nn.Module):
     """
-    Quantum Anchor Network: Creates stochastic superposition states
+    Quantum Anchor Network: Extracts the Identity (Anchor) from the Video.
     
-    Theory: Anchor A represents ALL possible frames in superposition.
-    The anchor contains high entropy and frame-agnostic information,
-    serving as the 'quantum state' that collapses to specific frames.
+    Theory: The anchor |A> represents the "Identity" of the video, stripped of time.
+    It sits on the Hypersphere (Norm=1).
     
-    Input: x0 ∈ R[B, C, F, H, W] (all frames)
-    Output: μ, σ ∈ R[B, C, 1, H, W] (quantum anchor parameters)
+    Input: x0 ∈ R[B, C, F, H, W] (Video)
+    Output: A ∈ R[B, C, 1, H, W] (Anchor, Norm=1)
     """
     
     def __init__(self, latent_dim: int = 128, hidden_dim: int = 256):
         super().__init__()
         self.latent_dim = latent_dim
         
-        # Frame encoder with enhanced capacity for quantum representation
-        self.frame_encoder = nn.Sequential(
-            nn.Conv2d(latent_dim, hidden_dim // 4, 3, padding=1),
-            nn.SiLU(),
-            nn.Conv2d(hidden_dim // 4, hidden_dim // 2, 3, stride=2, padding=1),
-            nn.SiLU(),
-            nn.AdaptiveAvgPool2d(8),
-        )
+        # Simple encoder to extract identity from frames
+        # Input: (B, C, F, H, W) -> Collapse Time -> (B, C, 1, H, W)
         
-        # Quantum superposition processor
-        feature_dim = hidden_dim // 2 * 8 * 8
+        # We process the temporal dimension.
+        # Ideally, we want to find the "center" of the frame cluster on the sphere.
+        # A simple approximation is the normalized mean.
+        # But we can add a small learnable adapter to refine it.
         
-        # Enhanced temporal attention for quantum coherence
-        self.quantum_attention = nn.MultiheadAttention(
-            embed_dim=feature_dim,
-            num_heads=16,  # Increased heads for better superposition modeling
-            batch_first=True,
-            dropout=0.15
-        )
-        
-        # Entropy maximization layer for stochastic superposition
-        self.entropy_enhancer = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim * 2),
+        self.adapter = nn.Sequential(
+            nn.Conv2d(latent_dim, hidden_dim, 3, padding=1),
             nn.SiLU(),
-            nn.Dropout(0.2),
-            nn.Linear(feature_dim * 2, feature_dim),
+            nn.Conv2d(hidden_dim, latent_dim, 3, padding=1)
         )
-        
-        # Quantum state parameter heads with increased variance capacity
-        self.mu_head = nn.Sequential(
-            nn.Linear(feature_dim, hidden_dim * 2),
-            nn.SiLU(),
-            nn.Linear(hidden_dim * 2, latent_dim * 8 * 8),
-        )
-        
-        self.log_sigma2_head = nn.Sequential(
-            nn.Linear(feature_dim, hidden_dim * 2),
-            nn.SiLU(),
-            nn.Linear(hidden_dim * 2, latent_dim * 8 * 8),
-        )
-    
-    def forward(self, x0: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    def forward(self, x0: torch.Tensor) -> torch.Tensor:
         """
-        Create quantum superposition state from all frames.
-        
-        Quantum Principle: The anchor must contain maximal entropy while preserving
-        identity information. It serves as the 'mixed state' before measurement.
+        Extract Anchor |A> from Video |V>.
         
         Args:
             x0: (B, C, F, H, W) video latents
             
         Returns:
-            mu: (B, C, 1, H, W) quantum anchor means (high entropy)
-            log_sigma2: (B, C, 1, H, W) quantum variance (enhanced for superposition)
+            anchor: (B, C, 1, H, W) normalized anchor
         """
-        B, C, F, H, W = x0.shape
+        # 1. Temporal Collapse (Mean)
+        # x0 is expected to be normalized? No, x0 is raw latents from VAE.
+        # We first extract the mean.
+        # (B, C, F, H, W) -> (B, C, 1, H, W)
+        mean_frame = x0.mean(dim=2, keepdim=True)
         
-        # Process each frame to extract quantum features
-        frames_flat = x0.reshape(B * F, C, H, W)
-        frame_features = self.frame_encoder(frames_flat)  # (B*F, C', 8, 8)
-        frame_features_flat = frame_features.reshape(B * F, -1)
-        frame_features = frame_features_flat.reshape(B, F, -1)
+        # 2. Refine Identity
+        B, C, _, H, W = mean_frame.shape
+        mean_flat = mean_frame.squeeze(2) # (B, C, H, W)
+        refined = mean_flat + self.adapter(mean_flat)
+        anchor = refined.unsqueeze(2) # (B, C, 1, H, W)
         
-        # Quantum coherence through enhanced attention
-        quantum_features, attention_weights = self.quantum_attention(
-            frame_features, frame_features, frame_features
-        )
+        # 3. Spherical Projection (Manifold Constraint)
+        anchor = F.normalize(anchor, p=2, dim=1)
         
-        # Entropy enhancement for stochastic superposition
-        enhanced_features = self.entropy_enhancer(quantum_features)
-        
-        # Quantum superposition: Maximize variance between frames while preserving mean
-        frame_means = enhanced_features.mean(dim=1)  # (B, feature_dim) - Identity preservation
-        frame_vars = enhanced_features.var(dim=1, unbiased=False)  # (B, feature_dim) - Frame differences
-        
-        # Enhanced superposition: Identity + 5x amplified variance for quantum uncertainty (Safe Overdrive)
-        quantum_superposition_factor = 5.0  # Increased to 5.0 to compensate for removed index scaling
-        quantum_repr = frame_means + quantum_superposition_factor * frame_vars
-        
-        # Additional high-frequency jitter for quantum decoherence potential
-        high_freq_jitter = 0.1 * torch.randn_like(quantum_repr)
-        quantum_repr = quantum_repr + high_freq_jitter
-        
-        # Predict quantum anchor parameters with enhanced variance
-        mu_flat = self.mu_head(quantum_repr)
-        log_sigma2_flat = self.log_sigma2_head(quantum_repr)
-        
-        mu = mu_flat.reshape(B, C, 1, 8, 8)
-        log_sigma2 = log_sigma2_flat.reshape(B, C, 1, 8, 8)
-        
-        # Enhanced variance range for quantum superposition
-        log_sigma2 = torch.clamp(log_sigma2, min=-8, max=8)  # Wider variance range
-        
-        # Upsample if needed
-        if 8 != H or 8 != W:
-            mu = nn.functional.interpolate(
-                mu.squeeze(2), size=(H, W), mode='bilinear', align_corners=False
-            ).unsqueeze(2)
-            log_sigma2 = nn.functional.interpolate(
-                log_sigma2.squeeze(2), size=(H, W), mode='bilinear', align_corners=False
-            ).unsqueeze(2)
-        
-        return mu, log_sigma2
-    
-    def sample_quantum_anchor(self, mu: torch.Tensor, log_sigma2: torch.Tensor) -> torch.Tensor:
-        """
-        Sample quantum superposition anchor: A = μ + σ ⊙ ξ
-        
-        Quantum Sampling: Enhanced stochasticity for maximum entropy state
-        
-        Args:
-            mu: (B, C, 1, H, W) quantum means
-            log_sigma2: (B, C, 1, H, W) quantum log variances
-            
-        Returns:
-            anchor: (B, C, 1, H, W) quantum superposition anchor
-        """
-        sigma = torch.exp(0.5 * log_sigma2)
-        
-        # Enhanced quantum noise with multiple random sources
-        xi_base = torch.randn_like(mu)  # Base quantum noise
-        xi_high_freq = 0.2 * torch.randn_like(mu)  # High-frequency quantum fluctuations
-        
-        # Quantum superposition with enhanced stochasticity
-        quantum_noise = xi_base + xi_high_freq
-        return mu + sigma * quantum_noise
+        return anchor
 
 
 class QuantumStateCollapseFlowMatching(FlowMatchingBase):
     """
-    Quantum State Collapse Flow Matching - Solves Averaging Collapse Problem
+    Spherical Geodesic Flow Matching.
 
-    Quantum Path: x_t = α_t * x_noise + β_t * A + γ_t(i) * x_i
-    where γ_t(i) includes Frame-wise Repulsion and Decoherence Operators
+    Implements:
+    1. Slerp for forward process z_t.
+    2. Tangent Projection for velocity field v_theta.
 
-    Revolutionary innovations:
-    - Quantum Anchor: Stochastic superposition of all frames
-    - State Collapse: Frame index measurement breaks superposition
-    - Frame Repulsion: Anti-averaging forces (t < 0.2)
-    - Orthogonality Loss: Enforce frame uniqueness
+    Manifold: S^{d-1} (Hypersphere)
+    Path: Geodesic (Great Circle)
     """
     
     def __init__(self, t_star: float = 0.2, anchor_net: Optional[QuantumAnchorNetwork] = None):
-        # LTX-Video convention: t=1.0(Noise) -> t=0.0(Data)
-        # t_star: Quantum decoherence threshold (anchor influence peak)
-        self.t_star = t_star
+        self.t_star = t_star # Not strictly used in pure Slerp, but kept for compatibility
         self.anchor_net = anchor_net
 
-        # Quantum diagnostic metrics
-        self._quantum_metrics = {}
-
     def sample_noise(self, x0_shape: Tuple[int, ...]) -> torch.Tensor:
-        """Sample shared noise topology for quantum coherence"""
-        B, C, F, H, W = x0_shape
-        return torch.randn(B, C, 1, H, W)  # Shared across frames for coherence
-    
-    def compute_anchor(self, x0: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Compatibility alias for compute_quantum_anchor"""
-        return self.compute_quantum_anchor(x0)
-    
-    def compute_quantum_anchor(self, x0: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Sample noise on the hypersphere."""
+        noise = torch.randn(x0_shape)
+        return F.normalize(noise, p=2, dim=1)
+
+    def slerp(self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """
-        Quantum Superposition Anchor: Creates mixed state containing ALL frame possibilities
-
-        Quantum Strategy: Maximum entropy while preserving identity information.
-        The anchor represents a 'coherent superposition' of all frames that will
-        collapse to specific states during the decoherence process (t < 0.2).
+        Spherical Linear Interpolation.
+        
+        z_t = [sin((1-t)Ω) / sin(Ω)] * x0 + [sin(tΩ) / sin(Ω)] * x1
+        where Ω = arccos(<x0, x1>)
         """
-        if self.anchor_net is None:
-            # Manual quantum superposition without network
-            B, C, F, H, W = x0.shape
-            
-            # Create quantum superposition from frame statistics
-            frame_mean = x0.mean(dim=2, keepdim=True)  # Identity preservation
-            frame_std = x0.std(dim=2, keepdim=True)   # Frame diversity measure
-            
-            # Quantum anchor: Mean + enhanced variance for superposition
-            quantum_uncertainty = 2.0 * frame_std  # Amplified uncertainty
-            mu = frame_mean + 0.1 * quantum_uncertainty
-            
-            # Add high-frequency jitter for quantum decoherence potential
-            high_freq_pattern = torch.randn_like(mu) * 0.05
-            mu = mu + high_freq_pattern
-            
-            # Enhanced variance for quantum states
-            log_sigma2 = torch.log(0.1 + frame_std.square())  # Adaptive variance
-        else:
-            # Use quantum anchor network
-            mu, log_sigma2 = self.anchor_net(x0)
-
-        # Sample quantum anchor with enhanced stochasticity
-        anchor = self.anchor_net.sample_quantum_anchor(mu, log_sigma2) if self.anchor_net else self._sample_quantum_anchor(mu, log_sigma2)
-        return anchor, mu, log_sigma2
+        # Ensure inputs are normalized
+        x0_norm = F.normalize(x0, p=2, dim=1)
+        x1_norm = F.normalize(x1, p=2, dim=1)
         
-    def _sample_quantum_anchor(self, mu: torch.Tensor, log_sigma2: torch.Tensor) -> torch.Tensor:
-        """Fallback quantum anchor sampling when no network is used"""
-        sigma = torch.exp(0.5 * log_sigma2)
-        xi_base = torch.randn_like(mu)
-        xi_quantum = 0.3 * torch.randn_like(mu)  # Additional quantum fluctuations
-        return mu + sigma * (xi_base + xi_quantum)
-    
-    def _compute_quantum_weights(self, t: torch.Tensor, frame_indices: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # Compute Omega (angle)
+        # Dot product along channel dimension
+        cos_omega = (x0_norm * x1_norm).sum(dim=1, keepdim=True)
+        
+        # Clamp for numerical stability
+        cos_omega = torch.clamp(cos_omega, -0.9999, 0.9999)
+        omega = torch.acos(cos_omega)
+        sin_omega = torch.sin(omega) + 1e-8 # Avoid division by zero
+        
+        # Broadcast t to compatible shape
+        # t: (B,) -> (B, 1, 1, 1, 1)
+        t_bc = t.view(-1, 1, 1, 1, 1)
+        
+        # Slerp coefficients
+        coeff0 = torch.sin((1.0 - t_bc) * omega) / sin_omega
+        coeff1 = torch.sin(t_bc * omega) / sin_omega
+        
+        z_t = coeff0 * x0_norm + coeff1 * x1_norm
+        
+        # Re-normalize to ensure numerical precision keeps it on sphere
+        return F.normalize(z_t, p=2, dim=1)
+
+    def compute_forward_path(self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor, **kwargs) -> torch.Tensor:
         """
-        Quantum State Collapse Weight Computation with Frame-wise Repulsion
-
-        Mathematical foundation:
-        - α_t: Noise weight (standard decay)
-        - β_t: Anchor weight (quantum decoherence at t_star)
-        - γ_t(i): Frame-specific weight with REPULSION forces
-
-        Quantum Collapse Mechanism:
-        - For t > t_star: Coherent superposition (anchor dominance)
-        - For t < t_star: State collapse with Frame Repulsion (anti-averaging)
-        - Ψ(i,t): Decoherence operator creates frame-specific paths
-        """
-        t_broad = t.view(-1, 1, 1, 1, 1)
-
-        # α_t: Noise weight (unchanged)
-        alpha_t = t_broad
-
-        # β_t: Quantum decoherence with ULTRA-SHARP transition
-        beta_width = 0.05  # EVEN SHARPER than before for quantum collapse
-        beta_base = torch.exp(-((t_broad - self.t_star) ** 2) / (2 * beta_width ** 2))
-        
-        # QUANTUM COLLAPSE: Below t_star, anchor becomes quantum vacuum
-        transition_mask = (t_broad < self.t_star).float()
-        quantum_decay = torch.exp(-25.0 * (self.t_star - t_broad))  # EXTREME decay for collapse
-        beta_t = beta_base * (1.0 - transition_mask + transition_mask * quantum_decay)
-
-        # γ_t(i): Frame-specific weight with REPULSION FIELD
-        gamma_base = 1.0 - t_broad
-        
-        # FRAME REPULSION MECHANISM: For t < t_star
-        repulsion_mask = (t_broad < self.t_star).float()
-        
-        # Calculate Frame-wise Repulsion strength (stronger as t approaches 0)
-        repulsion_strength = 5.0 * (self.t_star - t_broad) / self.t_star  # 0 to 5x boost
-        repulsion_strength = torch.clamp(repulsion_strength, 0.0, 5.0)
-        
-        # Apply FRAME REPULSION: Amplify frame-specific energy
-        frame_repulsion_factor = 1.0 + repulsion_mask * repulsion_strength
-        gamma_t = gamma_base * frame_repulsion_factor
-
-        # Normalization with quantum constraint
-        weight_sum = alpha_t + beta_t + gamma_t
-        alpha_t = alpha_t / weight_sum
-        beta_t = beta_t / weight_sum  
-        gamma_t = gamma_t / weight_sum
-
-        return alpha_t, beta_t, gamma_t
-
-    def compute_forward_path(self, noise: torch.Tensor, target: torch.Tensor, t: torch.Tensor, anchor: torch.Tensor) -> torch.Tensor:
-        """
-        Quantum State Collapse Path: x_t = α_t·noise + β_t·anchor + γ_t(i)·x_i
-
-        Quantum mechanics implementation:
-        - Superposition phase (t > t_star): All frames exist simultaneously in anchor
-        - Collapse phase (t < t_star): Frame-specific decoherence with repulsion
-        """
-        F = target.shape[2]
-
-        # Expand anchor and noise to match frame dimension
-        A_up = anchor.expand(-1, -1, F, -1, -1)
-        eps_up = noise.expand(-1, -1, F, -1, -1)
-
-        # Compute quantum weights with frame repulsion
-        alpha_t, beta_t, gamma_t = self._compute_quantum_weights(t)
-
-        # Quantum path with decoherence
-        z_t = alpha_t * eps_up + beta_t * A_up + gamma_t * target
-
-        # Store quantum metrics for diagnostics
-        self._quantum_metrics['alpha_t'] = alpha_t.squeeze().mean().item()
-        self._quantum_metrics['beta_t'] = beta_t.squeeze().mean().item()
-        self._quantum_metrics['gamma_t'] = gamma_t.squeeze().mean().item()
-        self._quantum_metrics['quantum_decoherence'] = (t < self.t_star).float().mean().item()
-
-        return z_t
-    
-    def compute_teacher_velocity(self, noise: torch.Tensor, target: torch.Tensor, t: torch.Tensor, anchor: torch.Tensor) -> torch.Tensor:
-        """
-        Quantum Collapse Velocity: u_t = dα/dt·noise + dβ/dt·anchor + dγ/dt(i)·x_i
-
-        The velocity includes the decoherence operator Ψ(i,t) that creates
-        frame-specific collapse directions, preventing averaging collapse.
-
-        CORRECTED: Uses Quotient Rule for normalized weight derivatives.
-        """
-        F = target.shape[2]
-        A_up = anchor.expand(-1, -1, F, -1, -1)
-        eps_up = noise.expand(-1, -1, F, -1, -1)
-
-        # Compute quantum weight derivatives
-        t_broad = t.view(-1, 1, 1, 1, 1)
-
-        # 1. Calculate raw weights (unnormalized)
-        alpha = t_broad
-        
-        beta_width = 0.05
-        beta_base = torch.exp(-((t_broad - self.t_star) ** 2) / (2 * beta_width ** 2))
-        transition_mask = (t_broad < self.t_star).float()
-        quantum_decay = torch.exp(-25.0 * (self.t_star - t_broad))
-        beta = beta_base * (1.0 - transition_mask + transition_mask * quantum_decay)
-
-        gamma_base = 1.0 - t_broad
-        repulsion_mask = (t_broad < self.t_star).float()
-        repulsion_strength = 5.0 * (self.t_star - t_broad) / self.t_star
-        repulsion_strength = torch.clamp(repulsion_strength, 0.0, 5.0)
-        frame_repulsion_factor = 1.0 + repulsion_mask * repulsion_strength
-        gamma = gamma_base * frame_repulsion_factor
-
-        # 2. Calculate derivatives of raw weights
-        # dα/dt = 1
-        d_alpha = torch.ones_like(t_broad)
-
-        # dβ/dt
-        decay_derivative = 25.0 * quantum_decay
-        d_beta_base = beta_base * (-(t_broad - self.t_star) / (beta_width ** 2))
-        d_beta = d_beta_base * (1.0 - transition_mask) + beta_base * transition_mask * decay_derivative
-        # Note: The original code had a minus sign for the second term, but with chain rule on exp(-25(t_star-t)):
-        # d/dt [-25(t_star - t)] = 25. So it multiplies by 25.
-        # However, the previous code had logic that seemed to try to stitch them.
-        # Let's trust the logic derived from the function:
-        # if t < t_star: beta = beta_base * decay. d(beta)/dt = d(base)/dt * decay + base * d(decay)/dt
-        # d(decay)/dt = decay * 25.
-        
-        # dγ/dt
-        d_gamma_base = -torch.ones_like(t_broad)
-        # repulsion_strength = 5 - 5t/t_star. d/dt = -5/t_star
-        d_repulsion = -5.0 / self.t_star * repulsion_mask
-        # gamma = gamma_base * (1 + repulsion)
-        # d_gamma = d_gamma_base * (1+rep) + gamma_base * d_rep
-        d_gamma = d_gamma_base * frame_repulsion_factor + gamma_base * d_repulsion
-
-        # 3. Calculate Sigma and dSigma
-        sigma = alpha + beta + gamma
-        d_sigma = d_alpha + d_beta + d_gamma
-
-        # 4. Apply Quotient Rule: d(w/sigma)/dt = (dw*sigma - w*dsigma) / sigma^2
-        sigma_sq = sigma.pow(2) + 1e-8 # Stability epsilon
-        
-        d_alpha_norm = (d_alpha * sigma - alpha * d_sigma) / sigma_sq
-        d_beta_norm = (d_beta * sigma - beta * d_sigma) / sigma_sq
-        d_gamma_norm = (d_gamma * sigma - gamma * d_sigma) / sigma_sq
-
-        # Quantum velocity components
-        u_noise = d_alpha_norm * eps_up
-        u_anchor = d_beta_norm * A_up
-        u_data = d_gamma_norm * target
-
-        # Total quantum collapse velocity
-        u_t = u_noise + u_anchor + u_data
-
-        # Store quantum velocity metrics
-        self._quantum_metrics['u_decoherence_energy'] = torch.abs(u_anchor).mean().item()
-        self._quantum_metrics['u_frame_repulsion'] = torch.abs(u_data).mean().item()
-
-        return u_t
-    
-    def compute_orthogonality_loss(self, frame_predictions: torch.Tensor) -> torch.Tensor:
-        """
-        Quantum Non-Redundancy Loss: Enforce frame orthogonality
-        
-        Ensures that predictions for different frames are maximally different,
-        preventing the averaging collapse by penalizing similar outputs.
+        Compute z_t on the geodesic between x0 and x1.
         
         Args:
-            frame_predictions: (B, C, F, H, W) predicted velocities for each frame
-            
-        Returns:
-            orthogonality_loss: Scalar penalty for frame similarity
+            x0: Source (e.g., Noise or Anchor)
+            x1: Target (e.g., Anchor or Video)
+            t: Time [0, 1]
         """
-        B, C, F, H, W = frame_predictions.shape
+        return self.slerp(x0, x1, t)
+
+    def compute_teacher_velocity(self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor, z_t: torch.Tensor, **kwargs) -> torch.Tensor:
+        """
+        Compute Projected Flow Velocity.
         
-        # Flatten frames: (B, C, F, H, W) -> (B, F, C*H*W)
-        flattened_frames = frame_predictions.permute(0, 2, 1, 3, 4).reshape(B, F, -1)
+        u_linear = x1 - x0
+        u_tangent = u_linear - <u_linear, z_t> * z_t
         
-        # Compute pairwise cosine similarities between frames
-        frame_norms = torch.norm(flattened_frames, dim=2, keepdim=True)  # (B, F, 1)
-        normalized_frames = flattened_frames / (frame_norms + 1e-8)
+        This removes the radial component, leaving only the rotational component.
+        """
+        # Ensure inputs are normalized for correct calculation
+        x0_norm = F.normalize(x0, p=2, dim=1)
+        x1_norm = F.normalize(x1, p=2, dim=1)
+        z_t_norm = F.normalize(z_t, p=2, dim=1)
         
-        # Cosine similarity matrix: (B, F, F)
-        cosine_matrix = torch.bmm(normalized_frames, normalized_frames.transpose(1, 2))
+        # 1. Linear Velocity (Secant vector)
+        u_linear = x1_norm - x0_norm
         
-        # Create mask to exclude diagonal (self-similarity)
-        mask = torch.eye(F, device=frame_predictions.device).unsqueeze(0).expand(B, -1, -1)
+        # 2. Tangent Projection
+        # Project u_linear onto the tangent space at z_t
+        # Formula: v = u - (u . z) * z
+        dot_prod = (u_linear * z_t_norm).sum(dim=1, keepdim=True)
+        radial_component = dot_prod * z_t_norm
         
-        # Orthogonality loss: Penalize high off-diagonal similarities
-        off_diagonal_similarities = cosine_matrix * (1 - mask)
-        orthogonality_loss = torch.abs(off_diagonal_similarities).mean()
+        u_tangent = u_linear - radial_component
         
-        # Store metric
-        self._quantum_metrics['frame_orthogonality'] = 1.0 - orthogonality_loss.item()
-        
-        return orthogonality_loss
-    
+        return u_tangent
+
+    # Compatibility methods
+    def compute_quantum_anchor(self, x0: torch.Tensor) -> torch.Tensor:
+        """Computes anchor using the network."""
+        if self.anchor_net:
+            return self.anchor_net(x0)
+        else:
+            # Fallback: Temporal Mean + Normalize
+            return F.normalize(x0.mean(dim=2, keepdim=True), p=2, dim=1)
+
     def get_quantum_metrics(self):
-        """Return quantum collapse diagnostic metrics"""
-        return self._quantum_metrics.copy()
-    
-    def get_rab_metrics(self):
-        """Compatibility alias for get_quantum_metrics"""
-        return self.get_quantum_metrics()
-    
-    def get_snr_metrics(self):
-        """Compatibility alias for get_quantum_metrics"""
-        return self.get_quantum_metrics()
+        return {}
 
 
-def create_quantum_flow_matching(t_star: float = 0.2, latent_dim: int = 128, use_anchor_net: bool = False) -> QuantumStateCollapseFlowMatching:
-    """
-    Factory function to create Quantum State Collapse Flow Matching instance.
-    
-    Args:
-        t_star: Quantum decoherence threshold
-        latent_dim: Latent dimension for anchor network
-        use_anchor_net: Whether to use learnable quantum anchor network
-        
-    Returns:
-        QuantumStateCollapseFlowMatching instance
-    """
+def create_quantum_flow_matching(t_star: float = 0.2, latent_dim: int = 128, use_anchor_net: bool = True) -> QuantumStateCollapseFlowMatching:
     if use_anchor_net:
         anchor_net = QuantumAnchorNetwork(latent_dim=latent_dim)
     else:
