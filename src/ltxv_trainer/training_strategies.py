@@ -23,7 +23,7 @@ from ltxv_trainer.timestep_samplers import TimestepSampler
 
 from .ring_zipper_flow import FlowMatchingBase, create_flow_matching
 
-
+from .quantum_training_strategy import QuantumTrainingStrategy
 
 DEFAULT_FPS = 24  # Default frames per second for video missing in the FPS metadata
 
@@ -752,10 +752,11 @@ class ReferenceVideoTrainingStrategy(TrainingStrategy):
 
 
 
-def get_training_strategy(conditioning_config: ConditioningConfig, 
-                         current_step: int = 0, 
+def get_training_strategy(conditioning_config: ConditioningConfig,
+                         current_step: int = 0,
                          auto_transition_step: int = 10000,
-                         use_phase_separation: bool = False) -> TrainingStrategy:
+                         use_phase_separation: bool = False,
+                         model_dtype = None) -> TrainingStrategy:
     """
     Advanced Training Strategy Factory with AFM Phase Separation Support
     
@@ -766,6 +767,12 @@ def get_training_strategy(conditioning_config: ConditioningConfig,
         use_phase_separation: AFM Phase Separation 활성화 여부
     """
     conditioning_mode = conditioning_config.mode
+
+
+    if conditioning_mode == "quantum_fm": # quantum_fm 처리 로직 추가
+            t_star = getattr(conditioning_config, "t_star", 0.2)
+            use_anchor_net = True # 기본값 설정
+            return QuantumTrainingStrategy(t_star=t_star, use_anchor_net=use_anchor_net, model_dtype=model_dtype)
 
     if conditioning_mode == "ring_fm":
         if use_phase_separation:

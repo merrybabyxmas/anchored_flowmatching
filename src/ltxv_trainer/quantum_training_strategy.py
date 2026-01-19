@@ -19,23 +19,27 @@ from .quantum_collapse_flow import QuantumStateCollapseFlowMatching, create_quan
 class QuantumTrainingStrategy:
     """Quantum State Collapse Training Strategy Implementation."""
 
-    def __init__(self, t_star: float = 0.2, use_anchor_net: bool = False):
+    def __init__(self, t_star: float = 0.2, use_anchor_net: bool = False, model_dtype=None):
+        import torch
+        self.model_dtype = model_dtype if model_dtype is not None else torch.float32
+        print(f"[DEBUG QuantumTrainingStrategy] Initializing with dtype: {self.model_dtype}")
         self.flow_matching = create_quantum_flow_matching(
             t_star=t_star,
             latent_dim=128,  # Will be updated based on actual data
-            use_anchor_net=use_anchor_net
+            use_anchor_net=use_anchor_net,
+            dtype=self.model_dtype
         )
         self.accelerator = None  # Will be set by trainer
         self.global_step = 0  # Will be updated by trainer
-        
+
         # Quantum-specific hyperparameters
         self.temporal_embedding_amplification = 5.0  # 5x overdrive
         self.orthogonality_loss_weight = 0.1  # Weight for frame uniqueness loss
         self.quantum_metrics_log_interval = 50  # Log quantum metrics every N steps
     
-    def get_data_sources(self) -> Set[str]:
+    def get_data_sources(self) -> list[str]:
         """Quantum FM needs latent data."""
-        return {"latents"}
+        return ["latents"]
         
     def prepare_batch(self, batch: Dict[str, Any], timestep_sampler) -> Dict[str, torch.Tensor]:
         """
@@ -63,7 +67,11 @@ class QuantumTrainingStrategy:
 
         # 2. Device alignment for quantum computations
         device = x0.device
-        x0 = x0.to(device)
+        # Ensure consistent dtype with QuantumAnchorNetwork (matches transformer dtype)
+        x0 = x0.to(device=device, dtype=self.model_dtype)
+
+        # Debug: Print tensor shape
+        print(f"[DEBUG] x0 shape: {x0.shape}, dim: {x0.dim()}")
 
         # 3. Dimension handling and validation
         if x0.dim() == 5:
@@ -77,12 +85,28 @@ class QuantumTrainingStrategy:
             F, H, W = 16, 8, 8
             C = latent_dim
             x0 = x0.squeeze(1).view(B, F, H, W, C).permute(0, 4, 1, 2, 3)
+        elif x0.dim() == 3:
+            # Handle [B, seq_len, C] format
+            B, seq_len, C = x0.shape
+            B, seq_len, C = int(B), int(seq_len), int(C)
+
+            # Assume standard LTX-Video latent dimensions
+            F, H, W = 16, 8, 8  # Default: 16 frames, 8x8 spatial
+
+            # Reshape to [B, C, F, H, W]
+            x0 = x0.view(B, F, H, W, C).permute(0, 4, 1, 2, 3)
+        else:
+            raise ValueError(f"Unsupported tensor dimension: {x0.dim()}. Expected 3, 4, or 5 dimensions.")
 
         # 4. Update flow matching latent dimension if needed
         if hasattr(self.flow_matching, 'anchor_net') and self.flow_matching.anchor_net:
+            # Move anchor_net to correct device and dtype if not already there
+            if self.flow_matching.anchor_net.frame_encoder[0].weight.device != device:
+                self.flow_matching.anchor_net = self.flow_matching.anchor_net.to(device=device, dtype=self.model_dtype)
+
             if self.flow_matching.anchor_net.latent_dim != C:
                 from .quantum_collapse_flow import QuantumAnchorNetwork, QuantumStateCollapseFlowMatching
-                anchor_net = QuantumAnchorNetwork(latent_dim=C).to(device)
+                anchor_net = QuantumAnchorNetwork(latent_dim=C).to(device=device, dtype=self.model_dtype)
                 self.flow_matching = QuantumStateCollapseFlowMatching(
                     t_star=self.flow_matching.t_star,
                     anchor_net=anchor_net
@@ -90,15 +114,16 @@ class QuantumTrainingStrategy:
 
         # 5. Quantum flow matching computations
         B = x0.shape[0]
-        t = timestep_sampler.sample(B).to(device)
+        seq_len = F * H * W  # Total sequence length after reshaping
+        t = timestep_sampler.sample(B, seq_len).to(device)
 
         # Quantum noise (shared across frames for coherence)
-        noise = self.flow_matching.sample_noise(x0.shape).to(device)
+        noise = self.flow_matching.sample_noise(x0.shape, dtype=self.model_dtype, device=device)
 
         # Quantum anchor computation (superposition state)
         anchor, mu, log_sigma2 = self.flow_matching.compute_quantum_anchor(x0)
 
-        # Quantum path and velocity
+        # Quantum path and velocity (dtype already matches model_dtype through x0)
         z_t = self.flow_matching.compute_forward_path(noise, x0, t, anchor=anchor)
         u_t = self.flow_matching.compute_teacher_velocity(noise, x0, t, anchor=anchor)
 
@@ -142,40 +167,70 @@ class QuantumTrainingStrategy:
             "mu": mu,
             "log_sigma2": log_sigma2,
             "frame_indices": frame_indices,
-            "quantum_metrics": quantum_metrics
+            "quantum_metrics": quantum_metrics,
+            # Add metadata needed by prepare_model_inputs
+            "height": H,
+            "width": W,
+            "num_frames": F,
+            "batch_size": B,
         }
     
     def prepare_model_inputs(self, training_batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
         Prepare model inputs with Safe Temporal Processing.
-        
+
         Correction: Removed unsafe index amplification that caused embedding overflow.
         Temporal distinction is now handled by QuantumAnchorNetwork factor or internal model attention.
         """
         z_t = training_batch["z_t"]
         t = training_batch["t"]
         frame_indices = training_batch["frame_indices"]
-        
-        B, C, F, H, W = z_t.shape
+
+        # Get metadata from training_batch
+        H = training_batch["height"]
+        W = training_batch["width"]
+        F = training_batch["num_frames"]
+        B = training_batch["batch_size"]
+        C = z_t.shape[1]
         seq_len = F * H * W
-        
+
         # Reshape to sequence format for transformer
-        z_t_seq = z_t.permute(0, 2, 3, 4, 1).reshape(B, 1, seq_len, C)
-        timesteps = t.unsqueeze(1)  # (B, 1)
-        
+        # Ensure correct dtype (bfloat16 for LoRA mode) - quantum_collapse_flow may return float32
+        # Shape should be [B, seq_len, C] not [B, 1, seq_len, C]
+        z_t_seq = z_t.permute(0, 2, 3, 4, 1).reshape(B, seq_len, C).to(dtype=self.model_dtype)
+        print(f"[DEBUG prepare_model_inputs] z_t_seq dtype after conversion: {z_t_seq.dtype}, shape: {z_t_seq.shape}")
+        timesteps = t  # (B,) - no need to unsqueeze
+
         # Create frame position embeddings (Standard 0..F-1 range)
         frame_pos_flat = frame_indices.unsqueeze(-1).repeat(1, 1, H*W).reshape(B, seq_len)  # (B, seq_len)
-        
+
         # SAFE: Do not amplify indices directly. Keep them within valid range.
         # The 'overdrive' effect is shifted to QuantumAnchorNetwork or handled by model internals.
-        
+
+        # Generate dummy text embeddings for quantum training (no text conditioning)
+        # Default: [B, 256, 4096] as per DummyDataset defaults
+        device = z_t.device
+        prompt_sequence_length = 256
+        prompt_embed_dim = 4096
+        dummy_prompt_embeds = torch.zeros(
+            B, prompt_sequence_length, prompt_embed_dim,
+            dtype=self.model_dtype, device=device
+        )
+        dummy_attention_mask = torch.ones(
+            B, prompt_sequence_length,
+            dtype=torch.bool, device=device
+        )
+
         return {
             "hidden_states": z_t_seq,
             "timestep": timesteps,
-            "encoder_hidden_states": None,  # No text conditioning
-            "encoder_attention_mask": None,
-            "frame_positions": frame_pos_flat.long(),  # Original safe indices
-            "quantum_overdrive": False,  # Disabled unsafe overdrive
+            "encoder_hidden_states": dummy_prompt_embeds,  # Dummy text embeddings
+            "encoder_attention_mask": dummy_attention_mask,
+            "num_frames": F,
+            "height": H,
+            "width": W,
+            "rope_interpolation_scale": [1.0, 1.0, 1.0],  # Default scale factors
+            # Note: frame_positions and quantum_overdrive removed as LTXVideoTransformer3DModel doesn't accept them
         }
     
     def compute_loss(self, model_pred: torch.Tensor, training_batch: Dict[str, torch.Tensor]) -> torch.Tensor:
@@ -263,7 +318,11 @@ class QuantumTrainingStrategy:
         anchor_expanded = anchor.expand(-1, -1, F, -1, -1)
         
         # Frame-wise deviation from anchor
-        frame_deviations = torch.norm(x0 - anchor_expanded, dim=(1, 3, 4))  # (B, F)
+        # Flatten spatial dimensions and compute norm
+        diff = (x0 - anchor_expanded).flatten(2)  # (B, C, F*H*W)
+        frame_deviations = torch.norm(diff, dim=1)  # (B, F*H*W) -> need to reshape
+        # Average over spatial dimensions for each frame
+        frame_deviations = frame_deviations.view(x0.shape[0], x0.shape[2], -1).mean(dim=2)  # (B, F)
         collapse_energy = frame_deviations.mean().item()
         
         return collapse_energy

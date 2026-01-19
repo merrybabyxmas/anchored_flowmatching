@@ -106,6 +106,11 @@ class LtxvTrainer:
         self._setup_accelerator()
         self._load_models()
         self._compile_transformer()
+        # Initialize AFM config before training strategy
+        self._afm_config = getattr(self._config, 'afm_training', None)
+        # Initialize training strategy first before collecting trainable params
+        self._training_strategy = None
+        self._init_training_strategy()
         self._collect_trainable_params()
         self._load_checkpoint()
         self._prepare_models_for_training()
@@ -113,9 +118,6 @@ class LtxvTrainer:
         self._global_step = -1
         self._checkpoint_paths = []
         self._init_wandb()
-        # Defer training strategy initialization until after timestep sampler is ready
-        self._training_strategy = None
-        self._afm_config = getattr(self._config, 'afm_training', None)
 
     def train(  # noqa: PLR0912, PLR0915
         self,
@@ -583,9 +585,13 @@ class LtxvTrainer:
                     use_phase_separation=self._afm_config.use_phase_separation
                 )
         else:
-            # Legacy mode
-            self._training_strategy = get_training_strategy(self._config.conditioning)
-        
+            # Legacy mode - pass model dtype for QuantumAnchorNetwork
+            model_dtype = self._transformer.dtype
+            self._training_strategy = get_training_strategy(
+                self._config.conditioning,
+                model_dtype=model_dtype
+            )
+
         # Set accelerator and global_step reference for logging in training strategy
         self._training_strategy.accelerator = self._accelerator
         self._training_strategy.global_step = 0

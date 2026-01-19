@@ -18,6 +18,22 @@ class ModelConfig(ConfigBaseModel):
         default=LtxvModelVersion.latest(),
         description="Model source - can be a HuggingFace repo ID, local path, or LtxvModelVersion",
     )
+    
+    # Add fields from YAML config
+    id: str = Field(
+        default="Lightricks/LTX-Video",
+        description="Model ID from HuggingFace",
+    )
+    
+    variant: str = Field(
+        default="2b",
+        description="Model variant (e.g., 2b, 13b)",
+    )
+    
+    cache_dir: str | None = Field(
+        default=None,
+        description="Cache directory for model files",
+    )
 
     training_mode: Literal["lora", "full"] = Field(
         default="lora",
@@ -45,6 +61,12 @@ class ModelConfig(ConfigBaseModel):
 
 class LoraConfig(ConfigBaseModel):
     """Configuration for LoRA fine-tuning"""
+    
+    # Add enabled field from YAML
+    enabled: bool = Field(
+        default=True,
+        description="Whether LoRA is enabled",
+    )
 
     rank: int = Field(
         default=64,
@@ -74,8 +96,8 @@ class LoraConfig(ConfigBaseModel):
 class ConditioningConfig(ConfigBaseModel):
     """Configuration for conditioning during training"""
 
-    # 1. 'ring_fm'을 Literal 목록에 추가합니다.
-    mode: Literal["none", "reference_video", "ring_fm"] = Field(
+    # 1. 'ring_fm'과 'quantum_fm'을 Literal 목록에 추가합니다.
+    mode: Literal["none", "reference_video", "ring_fm", "quantum_fm"] = Field(
         default="none",
         description="Type of conditioning to use during training",
     )
@@ -99,6 +121,19 @@ class ConditioningConfig(ConfigBaseModel):
         default="ref_latents",
         description="Directory name for latents of reference videos when using reference_video mode",
     )
+
+
+class QuantumConfig(ConfigBaseModel): # 새로운 Quantum 전용 설정 클래스 추가
+    quantum_superposition_factor: float = 3.0
+    high_freq_jitter: float = 0.1
+    anchor_entropy_range: list[int] = [-8, 8]
+    collapse_threshold: float = 0.2
+    frame_repulsion_strength: float = 5.0
+    quantum_decay_rate: float = 25.0
+    cosine_similarity_penalty: bool = True
+    orthogonal_projection: bool = False
+
+
 
 class OptimizationConfig(ConfigBaseModel):
     """Configuration for optimization parameters"""
@@ -189,6 +224,37 @@ class DataConfig(ConfigBaseModel):
 
     preprocessed_data_root: str = Field(
         description="Path to folder containing preprocessed training data",
+    )
+    
+    # Add fields from YAML config
+    dataset_path: str = Field(
+        default="path/to/your/video/dataset",
+        description="Path to the video dataset",
+    )
+    
+    resolution: list[int] = Field(
+        default=[256, 256],
+        description="Spatial resolution [width, height]",
+    )
+    
+    num_frames: int = Field(
+        default=16,
+        description="Number of frames per video",
+    )
+    
+    frame_stride: int = Field(
+        default=1,
+        description="Frame stride for sampling",
+    )
+    
+    normalize_frames: bool = Field(
+        default=True,
+        description="Whether to normalize frames",
+    )
+    
+    temporal_consistency_check: bool = Field(
+        default=True,
+        description="Whether to check temporal consistency",
     )
 
     num_dataloader_workers: int = Field(
@@ -354,6 +420,22 @@ class FlowMatchingConfig(ConfigBaseModel):
         default_factory=dict,
         description="Parameters for timestep sampling",
     )
+    
+    # Add fields from YAML config
+    method: str = Field(
+        default="quantum_fm",
+        description="Flow matching method",
+    )
+    
+    t_star: float = Field(
+        default=0.2,
+        description="Quantum decoherence threshold",
+    )
+    
+    use_anchor_net: bool = Field(
+        default=True,
+        description="Enable learnable quantum anchor network",
+    )
 
 
 class AFMTrainingConfig(ConfigBaseModel):
@@ -393,6 +475,73 @@ class AFMTrainingConfig(ConfigBaseModel):
     )
 
 
+class TrainingConfig(ConfigBaseModel):
+    """Training configuration from YAML"""
+    strategy: str = Field(default="quantum_fm", description="Training strategy")
+    temporal_embedding_amplification: float = Field(default=5.0, description="Temporal signal boost")
+    orthogonality_loss_weight: float = Field(default=0.1, description="Frame uniqueness enforcement")
+    quantum_metrics_log_interval: int = Field(default=50, description="Log quantum metrics interval")
+
+
+class TrainingConfigDetailed(ConfigBaseModel):
+    """Detailed training configuration from YAML"""
+    learning_rate: str = Field(default="1e-4", description="Learning rate")
+    batch_size: int = Field(default=1, description="Batch size")
+    max_steps: int = Field(default=100000, description="Maximum training steps")
+    gradient_clip_norm: float = Field(default=1.0, description="Gradient clip norm")
+    mixed_precision: str = Field(default="bf16", description="Mixed precision mode")
+    gradient_accumulation_steps: int = Field(default=4, description="Gradient accumulation steps")
+    validation_steps: int = Field(default=1500, description="Validation steps")
+    num_validation_videos: int = Field(default=4, description="Number of validation videos")
+    validation_guidance_scale: float = Field(default=3.0, description="Validation guidance scale")
+
+
+class OptimizerConfig(ConfigBaseModel):
+    """Optimizer configuration from YAML"""
+    name: str = Field(default="adamw", description="Optimizer name")
+    betas: list[float] = Field(default=[0.9, 0.95], description="Optimizer betas")
+    weight_decay: str = Field(default="1e-2", description="Weight decay")
+    eps: str = Field(default="1e-8", description="Optimizer epsilon")
+
+
+class LrSchedulerConfig(ConfigBaseModel):
+    """Learning rate scheduler configuration from YAML"""
+    type: str = Field(default="cosine_annealing", description="Scheduler type")
+    warmup_steps: int = Field(default=1000, description="Warmup steps")
+    min_lr: str = Field(default="1e-6", description="Minimum learning rate")
+
+
+class OutputConfig(ConfigBaseModel):
+    """Output configuration from YAML"""
+    save_dir: str = Field(default="outputs/quantum_collapse_v1", description="Save directory")
+    checkpoint_steps: int = Field(default=5000, description="Checkpoint steps")
+    save_full_model: bool = Field(default=False, description="Save full model")
+    save_quantum_metrics: bool = Field(default=True, description="Save quantum metrics")
+    export_quantum_analysis: bool = Field(default=True, description="Export quantum analysis")
+
+
+class LoggingConfig(ConfigBaseModel):
+    """Logging configuration from YAML"""
+    use_wandb: bool = Field(default=True, description="Use Weights & Biases")
+    project_name: str = Field(default="quantum-video-generation", description="Project name")
+    run_name: str = Field(default="quantum_collapse_experiment", description="Run name")
+    log_quantum_metrics: bool = Field(default=True, description="Log quantum metrics")
+    log_frame_divergence: bool = Field(default=True, description="Log frame divergence")
+    log_state_collapse_energy: bool = Field(default=True, description="Log state collapse energy")
+    log_orthogonality_scores: bool = Field(default=True, description="Log orthogonality scores")
+    loss_log_steps: int = Field(default=10, description="Loss log steps")
+    metric_log_steps: int = Field(default=50, description="Metric log steps")
+    sample_log_steps: int = Field(default=1500, description="Sample log steps")
+
+
+class DebugConfig(ConfigBaseModel):
+    """Debug configuration from YAML"""
+    enabled: bool = Field(default=False, description="Enable debugging")
+    save_intermediate_states: bool = Field(default=False, description="Save intermediate states")
+    visualize_state_collapse: bool = Field(default=False, description="Visualize state collapse")
+    track_frame_similarity: bool = Field(default=True, description="Track frame similarity")
+
+
 class LtxvTrainerConfig(ConfigBaseModel):
     """Unified configuration for LTXV training"""
 
@@ -409,6 +558,16 @@ class LtxvTrainerConfig(ConfigBaseModel):
     flow_matching: FlowMatchingConfig = Field(default_factory=FlowMatchingConfig)
     wandb: WandbConfig = Field(default_factory=WandbConfig)
     afm_training: AFMTrainingConfig = Field(default_factory=AFMTrainingConfig)
+    
+    # Add missing configurations from YAML
+    training: TrainingConfig = Field(default_factory=TrainingConfig)
+    quantum: QuantumConfig = Field(default_factory=QuantumConfig)
+    training_config: TrainingConfigDetailed = Field(default_factory=TrainingConfigDetailed)
+    optimizer: OptimizerConfig = Field(default_factory=OptimizerConfig)
+    lr_scheduler: LrSchedulerConfig = Field(default_factory=LrSchedulerConfig)
+    output: OutputConfig = Field(default_factory=OutputConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    debug: DebugConfig = Field(default_factory=DebugConfig)
 
     # General configuration
     seed: int = Field(

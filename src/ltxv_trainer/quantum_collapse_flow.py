@@ -200,10 +200,10 @@ class QuantumStateCollapseFlowMatching(FlowMatchingBase):
         # Quantum diagnostic metrics
         self._quantum_metrics = {}
 
-    def sample_noise(self, x0_shape: Tuple[int, ...]) -> torch.Tensor:
+    def sample_noise(self, x0_shape: Tuple[int, ...], dtype=None, device=None) -> torch.Tensor:
         """Sample shared noise topology for quantum coherence"""
         B, C, F, H, W = x0_shape
-        return torch.randn(B, C, 1, H, W)  # Shared across frames for coherence
+        return torch.randn(B, C, 1, H, W, dtype=dtype, device=device)  # Shared across frames for coherence
     
     def compute_anchor(self, x0: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compatibility alias for compute_quantum_anchor"""
@@ -250,7 +250,7 @@ class QuantumStateCollapseFlowMatching(FlowMatchingBase):
         xi_quantum = 0.3 * torch.randn_like(mu)  # Additional quantum fluctuations
         return mu + sigma * (xi_base + xi_quantum)
     
-    def _compute_quantum_weights(self, t: torch.Tensor, frame_indices: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _compute_quantum_weights(self, t: torch.Tensor, dtype=None, frame_indices: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Quantum State Collapse Weight Computation with Frame-wise Repulsion
 
@@ -264,38 +264,45 @@ class QuantumStateCollapseFlowMatching(FlowMatchingBase):
         - For t < t_star: State collapse with Frame Repulsion (anti-averaging)
         - Ψ(i,t): Decoherence operator creates frame-specific paths
         """
+        # Ensure all operations use the same dtype to avoid float32 intermediate tensors
+        if dtype is None:
+            dtype = t.dtype
+        t = t.to(dtype=dtype)
         t_broad = t.view(-1, 1, 1, 1, 1)
 
         # α_t: Noise weight (unchanged)
         alpha_t = t_broad
 
         # β_t: Quantum decoherence with ULTRA-SHARP transition
-        beta_width = 0.05  # EVEN SHARPER than before for quantum collapse
+        beta_width = torch.tensor(0.05, dtype=dtype, device=t.device)
         beta_base = torch.exp(-((t_broad - self.t_star) ** 2) / (2 * beta_width ** 2))
         
         # QUANTUM COLLAPSE: Below t_star, anchor becomes quantum vacuum
-        transition_mask = (t_broad < self.t_star).float()
-        quantum_decay = torch.exp(-25.0 * (self.t_star - t_broad))  # EXTREME decay for collapse
-        beta_t = beta_base * (1.0 - transition_mask + transition_mask * quantum_decay)
+        transition_mask = (t_broad < self.t_star).to(dtype=dtype)
+        quantum_decay_coef = torch.tensor(-25.0, dtype=dtype, device=t.device)
+        quantum_decay = torch.exp(quantum_decay_coef * (self.t_star - t_broad))  # EXTREME decay for collapse
+        one = torch.tensor(1.0, dtype=dtype, device=t.device)
+        beta_t = beta_base * (one - transition_mask + transition_mask * quantum_decay)
 
         # γ_t(i): Frame-specific weight with REPULSION FIELD
-        gamma_base = 1.0 - t_broad
-        
+        gamma_base = one - t_broad
+
         # FRAME REPULSION MECHANISM: For t < t_star
-        repulsion_mask = (t_broad < self.t_star).float()
-        
+        repulsion_mask = (t_broad < self.t_star).to(dtype=dtype)
+
         # Calculate Frame-wise Repulsion strength (stronger as t approaches 0)
-        repulsion_strength = 5.0 * (self.t_star - t_broad) / self.t_star  # 0 to 5x boost
-        repulsion_strength = torch.clamp(repulsion_strength, 0.0, 5.0)
-        
+        repulsion_factor = torch.tensor(5.0, dtype=dtype, device=t.device)
+        repulsion_strength = repulsion_factor * (self.t_star - t_broad) / self.t_star  # 0 to 5x boost
+        repulsion_strength = torch.clamp(repulsion_strength, torch.tensor(0.0, dtype=dtype, device=t.device), repulsion_factor)
+
         # Apply FRAME REPULSION: Amplify frame-specific energy
-        frame_repulsion_factor = 1.0 + repulsion_mask * repulsion_strength
+        frame_repulsion_factor = one + repulsion_mask * repulsion_strength
         gamma_t = gamma_base * frame_repulsion_factor
 
         # Normalization with quantum constraint
         weight_sum = alpha_t + beta_t + gamma_t
         alpha_t = alpha_t / weight_sum
-        beta_t = beta_t / weight_sum  
+        beta_t = beta_t / weight_sum
         gamma_t = gamma_t / weight_sum
 
         return alpha_t, beta_t, gamma_t
@@ -310,12 +317,15 @@ class QuantumStateCollapseFlowMatching(FlowMatchingBase):
         """
         F = target.shape[2]
 
+        # Ensure t matches target dtype to avoid float32 intermediate tensors
+        t = t.to(dtype=target.dtype)
+
         # Expand anchor and noise to match frame dimension
         A_up = anchor.expand(-1, -1, F, -1, -1)
         eps_up = noise.expand(-1, -1, F, -1, -1)
 
         # Compute quantum weights with frame repulsion
-        alpha_t, beta_t, gamma_t = self._compute_quantum_weights(t)
+        alpha_t, beta_t, gamma_t = self._compute_quantum_weights(t, target.dtype)
 
         # Quantum path with decoherence
         z_t = alpha_t * eps_up + beta_t * A_up + gamma_t * target
@@ -338,26 +348,36 @@ class QuantumStateCollapseFlowMatching(FlowMatchingBase):
         CORRECTED: Uses Quotient Rule for normalized weight derivatives.
         """
         F = target.shape[2]
+
+        # Ensure t matches target dtype to avoid float32 intermediate tensors
+        t = t.to(dtype=target.dtype)
+
         A_up = anchor.expand(-1, -1, F, -1, -1)
         eps_up = noise.expand(-1, -1, F, -1, -1)
 
         # Compute quantum weight derivatives
+        dtype = target.dtype
+        device = target.device
         t_broad = t.view(-1, 1, 1, 1, 1)
 
         # 1. Calculate raw weights (unnormalized)
         alpha = t_broad
-        
-        beta_width = 0.05
-        beta_base = torch.exp(-((t_broad - self.t_star) ** 2) / (2 * beta_width ** 2))
-        transition_mask = (t_broad < self.t_star).float()
-        quantum_decay = torch.exp(-25.0 * (self.t_star - t_broad))
-        beta = beta_base * (1.0 - transition_mask + transition_mask * quantum_decay)
 
-        gamma_base = 1.0 - t_broad
-        repulsion_mask = (t_broad < self.t_star).float()
-        repulsion_strength = 5.0 * (self.t_star - t_broad) / self.t_star
-        repulsion_strength = torch.clamp(repulsion_strength, 0.0, 5.0)
-        frame_repulsion_factor = 1.0 + repulsion_mask * repulsion_strength
+        beta_width = torch.tensor(0.05, dtype=dtype, device=device)
+        beta_base = torch.exp(-((t_broad - self.t_star) ** 2) / (2 * beta_width ** 2))
+        transition_mask = (t_broad < self.t_star).to(dtype=dtype)
+        quantum_decay_coef = torch.tensor(-25.0, dtype=dtype, device=device)
+        quantum_decay = torch.exp(quantum_decay_coef * (self.t_star - t_broad))
+        one = torch.tensor(1.0, dtype=dtype, device=device)
+        beta = beta_base * (one - transition_mask + transition_mask * quantum_decay)
+
+        gamma_base = one - t_broad
+        repulsion_mask = (t_broad < self.t_star).to(dtype=dtype)
+        repulsion_factor = torch.tensor(5.0, dtype=dtype, device=device)
+        repulsion_strength = repulsion_factor * (self.t_star - t_broad) / self.t_star
+        zero = torch.tensor(0.0, dtype=dtype, device=device)
+        repulsion_strength = torch.clamp(repulsion_strength, zero, repulsion_factor)
+        frame_repulsion_factor = one + repulsion_mask * repulsion_strength
         gamma = gamma_base * frame_repulsion_factor
 
         # 2. Calculate derivatives of raw weights
@@ -365,20 +385,22 @@ class QuantumStateCollapseFlowMatching(FlowMatchingBase):
         d_alpha = torch.ones_like(t_broad)
 
         # dβ/dt
-        decay_derivative = 25.0 * quantum_decay
+        decay_derivative_coef = torch.tensor(25.0, dtype=dtype, device=device)
+        decay_derivative = decay_derivative_coef * quantum_decay
         d_beta_base = beta_base * (-(t_broad - self.t_star) / (beta_width ** 2))
-        d_beta = d_beta_base * (1.0 - transition_mask) + beta_base * transition_mask * decay_derivative
+        d_beta = d_beta_base * (one - transition_mask) + beta_base * transition_mask * decay_derivative
         # Note: The original code had a minus sign for the second term, but with chain rule on exp(-25(t_star-t)):
         # d/dt [-25(t_star - t)] = 25. So it multiplies by 25.
         # However, the previous code had logic that seemed to try to stitch them.
         # Let's trust the logic derived from the function:
         # if t < t_star: beta = beta_base * decay. d(beta)/dt = d(base)/dt * decay + base * d(decay)/dt
         # d(decay)/dt = decay * 25.
-        
+
         # dγ/dt
         d_gamma_base = -torch.ones_like(t_broad)
         # repulsion_strength = 5 - 5t/t_star. d/dt = -5/t_star
-        d_repulsion = -5.0 / self.t_star * repulsion_mask
+        d_repulsion_coef = torch.tensor(-5.0, dtype=dtype, device=device)
+        d_repulsion = d_repulsion_coef / self.t_star * repulsion_mask
         # gamma = gamma_base * (1 + repulsion)
         # d_gamma = d_gamma_base * (1+rep) + gamma_base * d_rep
         d_gamma = d_gamma_base * frame_repulsion_factor + gamma_base * d_repulsion
@@ -388,8 +410,9 @@ class QuantumStateCollapseFlowMatching(FlowMatchingBase):
         d_sigma = d_alpha + d_beta + d_gamma
 
         # 4. Apply Quotient Rule: d(w/sigma)/dt = (dw*sigma - w*dsigma) / sigma^2
-        sigma_sq = sigma.pow(2) + 1e-8 # Stability epsilon
-        
+        epsilon = torch.tensor(1e-8, dtype=dtype, device=device)
+        sigma_sq = sigma.pow(2) + epsilon  # Stability epsilon
+
         d_alpha_norm = (d_alpha * sigma - alpha * d_sigma) / sigma_sq
         d_beta_norm = (d_beta * sigma - beta * d_sigma) / sigma_sq
         d_gamma_norm = (d_gamma * sigma - gamma * d_sigma) / sigma_sq
@@ -458,20 +481,25 @@ class QuantumStateCollapseFlowMatching(FlowMatchingBase):
         return self.get_quantum_metrics()
 
 
-def create_quantum_flow_matching(t_star: float = 0.2, latent_dim: int = 128, use_anchor_net: bool = False) -> QuantumStateCollapseFlowMatching:
+def create_quantum_flow_matching(t_star: float = 0.2, latent_dim: int = 128, use_anchor_net: bool = False, dtype=None) -> QuantumStateCollapseFlowMatching:
     """
     Factory function to create Quantum State Collapse Flow Matching instance.
-    
+
     Args:
         t_star: Quantum decoherence threshold
         latent_dim: Latent dimension for anchor network
         use_anchor_net: Whether to use learnable quantum anchor network
-        
+        dtype: Data type for anchor network (e.g., torch.float32, torch.bfloat16)
+
     Returns:
         QuantumStateCollapseFlowMatching instance
     """
+    import torch
+    if dtype is None:
+        dtype = torch.float32
+
     if use_anchor_net:
-        anchor_net = QuantumAnchorNetwork(latent_dim=latent_dim)
+        anchor_net = QuantumAnchorNetwork(latent_dim=latent_dim).to(dtype=dtype)
     else:
         anchor_net = None
     

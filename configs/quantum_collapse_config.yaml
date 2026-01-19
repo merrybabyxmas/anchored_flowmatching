@@ -2,11 +2,18 @@
 # Solves Averaging Collapse Problem in Video Generation
 
 # Model Configuration
+# Model configuration
 model:
-  id: "Lightricks/LTX-Video"
-  variant: "2b"  # or "13b" for larger model
-  cache_dir: null
-  
+  model_source: "LTXV_2B_0.9.6_DEV" # Options: "LTXV_13B_097_DEV", "LTXV_2B_0.9.6_DEV", "LTXV_2B_0.9.5", "LTXV_2B_0.9.1", "LTXV_2B_0.9.0", or a HF repo/local path
+  training_mode: "lora" # Options: "lora" or "full"
+  load_checkpoint: null # Path to checkpoint file or directory to resume from. If directory, latest checkpoint will be used.
+
+# Conditioning Configuration
+conditioning:
+  mode: "quantum_fm"  # Set to quantum_fm to use Quantum Training Strategy
+  first_frame_conditioning_p: 0.1
+  t_star: 0.2  # Quantum decoherence threshold
+
 # Quantum Flow Matching Settings
 flow_matching:
   method: "quantum_fm"  # NEW: Quantum State Collapse (replaces ring_fm)
@@ -36,15 +43,20 @@ quantum:
   cosine_similarity_penalty: true     # Penalize similar frame predictions
   orthogonal_projection: false        # Optional: project frames to orthogonal space
 
+# Acceleration Configuration
+acceleration:
+  compile_with_inductor: false        # Disable torch.compile for now
+  mixed_precision_mode: "no"          # Disable mixed precision to avoid dtype issues
+
 # Training Configuration
 training_config:
   learning_rate: 1e-4
   batch_size: 1
   max_steps: 100000
-  
+
   # Enhanced for Quantum Training
   gradient_clip_norm: 1.0             # Prevent quantum instability
-  mixed_precision: "bf16"
+  mixed_precision: "no"               # Disable mixed precision for dtype compatibility
   gradient_accumulation_steps: 4
   
   # Validation Settings
@@ -52,9 +64,23 @@ training_config:
   num_validation_videos: 4
   validation_guidance_scale: 3.0
 
+# Validation Configuration
+validation:
+  skip_initial_validation: false
+  prompts:
+    - "The video features a man in a suit and tie, sitting in an office setting. The man is speaking, and his expression is serious. The office has a window with blinds, and the lighting is soft and natural. The man's suit is dark, and his tie is patterned. The office appears to be well-lit, with a warm tone to the lighting. The man's posture is upright, and he is looking directly at the camera. The overall style of the video is professional and formal."
+    - "The video features a woman with dark hair, wearing a pink top. She is captured in a close-up shot, with her face and upper body visible. The lighting is dim, creating a moody atmosphere. The woman appears to be in a state of contemplation or sadness, as she looks off to the side with a thoughtful expression. The style of the video is realistic, with a focus on the woman's emotions and the intimate setting."
+  video_dims: [512, 512, 25]
+  interval: 100  # Validate every 50 steps for testing
+  inference_steps: 30
+  guidance_scale: 3.5
+  videos_per_prompt: 1
+  seed: 42
+
 # Data Configuration
 data:
-  dataset_path: "path/to/your/video/dataset"
+  preprocessed_data_root: "/home/dongwoo38/openvid_data/.precomputed"  # Required field
+  dataset_path: "/home/dongwoo38/openvid_data"
   resolution: [256, 256]              # Spatial resolution
   num_frames: 16                      # Temporal length
   frame_stride: 1
@@ -103,7 +129,7 @@ output:
 
 # Logging Configuration
 logging:
-  use_wandb: true
+  use_wandb: false
   project_name: "quantum-video-generation"
   run_name: "quantum_collapse_experiment"
   
@@ -116,7 +142,7 @@ logging:
   # Log intervals
   loss_log_steps: 10
   metric_log_steps: 50
-  sample_log_steps: 1500
+  sample_log_steps: 200
 
 # Quantum Debugging (for development)
 debug:
